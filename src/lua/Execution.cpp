@@ -1,6 +1,5 @@
 #include "lua/Execution.h"
 #include "lua/Offsets.h"
-#include "ext/Bytecode.h"
 #include "shared/Log.h"
 #include "shared/Utils.h"
 
@@ -143,12 +142,11 @@ ExecResult Execution::run_now(const std::string& source, const std::string& chun
         return r;
     }
 
-    // luau_load expects Luau bytecode, not source. Compile first.
-    // On compile failure the returned buffer starts with '\0' followed by the
-    // error message — surface that immediately rather than feeding it to luau_load.
-    auto [ok, bytecode] = vt::ext::compile_raw_luau_bytecode(source);
-    if (!ok) {
-        r.error = bytecode.empty() ? std::string("luau compile failed") : ("luau compile: " + bytecode);
+    // luau_load expects Luau bytecode. The exe compiles source → bytecode
+    // before sending on the pipe, so `source` here is already a bytecode blob.
+    // Empty payload is nothing to run.
+    if (source.empty()) {
+        r.error = "empty bytecode payload";
         return r;
     }
 
@@ -156,8 +154,8 @@ ExecResult Execution::run_now(const std::string& source, const std::string& chun
     SehExec s{};
     s.L = L_;
     s.chunkname = chunkname.c_str();
-    s.data = bytecode.data();
-    s.size = bytecode.size();
+    s.data = source.data();
+    s.size = source.size();
     const int rc = seh_run(&s);
     if (rc == 1) {
         r.ok = true;

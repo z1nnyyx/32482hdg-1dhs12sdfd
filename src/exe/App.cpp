@@ -12,6 +12,7 @@
 #include "exe/resource.h"
 #include "ext/World.h"
 #include "ext/Overlay.h"
+#include "ext/Bytecode.h"
 #include "shared/Config.h"
 #include "shared/Log.h"
 #include "shared/PipeKey.h"
@@ -1131,13 +1132,24 @@ void start_ext_esp() {
 }
 
 void try_corescript(const std::string& src, const std::wstring& nm) {
-    // Preferred path: DLL is inside Roblox and pipe is up — ship the raw source
-    // to the module. The DLL (Execution::run_now) compiles it to Luau bytecode
-    // and runs it through luau_load + lua_pcall on the safe scheduler thread.
+    // Preferred path: DLL is inside Roblox and pipe is up.
+    // Compile source → Luau bytecode here (the exe links Luau's compiler;
+    // the DLL does not, to keep it small and unfingerprintable). Ship the
+    // bytecode blob over the pipe. The DLL runs it through luau_load +
+    // lua_pcall on the safe scheduler thread.
     if (g_pipe.connected() && g_mod_ready && !src.empty()) {
-        g_pipe.send({MsgType::Execute, src});
+        auto [ok, bc] = vt::ext::compile_raw_luau_bytecode(src);
+        if (!ok) {
+            const std::wstring msg = bc.empty()
+                ? std::wstring(L"luau compile failed")
+                : (L"luau compile: " + utf8_to_wide(bc));
+            VT_ERR(L"Execute " + nm + L" → " + msg);
+            notify(L"Runtime", msg, 5000);
+            return;
+        }
+        g_pipe.send({MsgType::Execute, bc});
         VT_LOG(L"Execute " + nm + L" → DLL (" +
-               std::to_wstring(src.size()) + L" bytes)");
+               std::to_wstring(bc.size()) + L" bytes bytecode)");
         return;
     }
     // Fallback: no DLL, no pipe — the exe has no way to reach the Luau VM.
