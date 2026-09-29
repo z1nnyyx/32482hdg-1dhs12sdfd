@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="exe">
+      <UniqueIdentifier>{a1111111-0001-0001-0001-000000000001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="core">
+      <UniqueIdentifier>{a1111111-0001-0001-0001-000000000002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="shared">
+      <UniqueIdentifier>{a1111111-0001-0001-0001-000000000003}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\exe\main.cpp"><Filter>exe</Filter></ClCompile>
+    <ClCompile Include="..\src\exe\App.cpp"><Filter>exe</Filter></ClCompile>
+    <ClCompile Include="..\src\shared\Log.cpp"><Filter>shared</Filter></ClCompile>
+    <ClCompile Include="..\src\shared\Config.cpp"><Filter>shared</Filter></ClCompile>
+    <ClCompile Include="..\src\shared\Utils.cpp"><Filter>shared</Filter></ClCompile>
+    <ClCompile Include="..\src\shared\Protocol.cpp"><Filter>shared</Filter></ClCompile>
+    <ClCompile Include="..\src\core\Process.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="..\src\core\Injector.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="..\src\core\ManualMap.cpp"><Filter>core</Filter></ClCompile>
+    <ClCompile Include="..\src\core\Pipe.cpp"><Filter>core</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\exe\App.h"><Filter>exe</Filter></ClInclude>
+    <ClInclude Include="..\src\shared\Log.h"><Filter>shared</Filter></ClInclude>
+    <ClInclude Include="..\src\shared\Config.h"><Filter>shared</Filter></ClInclude>
+    <ClInclude Include="..\src\shared\Utils.h"><Filter>shared</Filter></ClInclude>
+    <ClInclude Include="..\src\shared\Protocol.h"><Filter>shared</Filter></ClInclude>
+    <ClInclude Include="..\src\core\Process.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="..\src\core\Injector.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="..\src\core\ManualMap.h"><Filter>core</Filter></ClInclude>
+    <ClInclude Include="..\src\core\Pipe.h"><Filter>core</Filter></ClInclude>
+  </ItemGroup>
+</Project>

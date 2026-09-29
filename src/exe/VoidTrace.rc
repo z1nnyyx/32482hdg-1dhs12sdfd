@@ -1,0 +1,4 @@
+#include "resource.h"
+
+IDR_VT_MODULE RCDATA "VoidTrace.dll"
+IDR_VT_LOGO   RCDATA "logo.png"

@@ -1,0 +1,8 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="VoidTrace executor roblox/VoidTrace executor roblox.vcxproj" Id="c80799bd-3092-4a2a-950b-f08e87ecb21d" />
+  <Project Path="VoidTraceModule/VoidTraceModule.vcxproj" Id="9f3c1a20-7b44-4d2e-9c11-88a0b1c2d3e4" />
+</Solution>
