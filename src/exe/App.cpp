@@ -1131,9 +1131,25 @@ void start_ext_esp() {
 }
 
 void try_corescript(const std::string& src, const std::wstring& nm) {
-    (void)src;
+    // Preferred path: DLL is inside Roblox and pipe is up — ship the raw source
+    // to the module. The DLL (Execution::run_now) compiles it to Luau bytecode
+    // and runs it through luau_load + lua_pcall on the safe scheduler thread.
+    if (g_pipe.connected() && g_mod_ready && !src.empty()) {
+        g_pipe.send({MsgType::Execute, src});
+        VT_LOG(L"Execute " + nm + L" → DLL (" +
+               std::to_wstring(src.size()) + L" bytes)");
+        return;
+    }
+    // Fallback: no DLL, no pipe — the exe has no way to reach the Luau VM.
+    // Bring up the external overlay so at least ESP works, and tell the user
+    // exactly why their script did not run.
     start_ext_esp();
-    VT_LOG(L"Execute " + nm + L" → overlay (no Roblox bytecode)");
+    VT_LOG(L"Execute " + nm +
+           L" → overlay only (DLL not injected — scripts cannot execute; "
+           L"Rayfield / Drawing / hookmetamethod need in-process Luau)");
+    notify(L"Runtime",
+           L"Script cannot run — module is not inside Roblox. Overlay ESP is active.",
+           4500);
 }
 
 void flush_pending_exec() {
