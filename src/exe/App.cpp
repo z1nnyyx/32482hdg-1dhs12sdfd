@@ -1721,6 +1721,8 @@ void attach_after_sync() {
     // request from the DLL. If Roblox dies on your build, flip
     // "auto_inject" to false in config/offsets.json.
     bool injected_ok = false;
+    VT_LOG(std::wstring(L"auto_inject = ") + (g_auto_inject ? L"true" : L"false") +
+           L"  (cached in " + (data_root() / L"config" / L"offsets.json").wstring() + L")");
     if (g_auto_inject) {
         set_progress(30, L"injecting…");
         VT_LOG(L"auto_inject on — attempting manual-map");
