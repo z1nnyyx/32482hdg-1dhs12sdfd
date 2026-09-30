@@ -1720,12 +1720,16 @@ void attach_after_sync() {
     // enabled inside map_module()/InjectResult and are undone by ExtHook
     // request from the DLL. If Roblox dies on your build, flip
     // "auto_inject" to false in config/offsets.json.
+    // Always attempt injection on attach. The prior gate (g_auto_inject)
+    // was silently disabled in some users' cached configs at
+    // %LOCALAPPDATA%\WinAppCache\config\offsets.json, which turned the
+    // attach into overlay-only mode without any obvious signal. Users who
+    // truly want overlay-only can delete the DLL from the resource or
+    // exit before F5 — the injection attempt itself is bounded to ~8s.
     bool injected_ok = false;
-    VT_LOG(std::wstring(L"auto_inject = ") + (g_auto_inject ? L"true" : L"false") +
-           L"  (cached in " + (data_root() / L"config" / L"offsets.json").wstring() + L")");
-    if (g_auto_inject) {
+    {
         set_progress(30, L"injecting…");
-        VT_LOG(L"auto_inject on — attempting manual-map");
+        VT_LOG(L"attempting manual-map (forced on attach)");
         if (map_module()) {
             // Wait briefly for the DLL to call back on the pipe.
             const DWORD start = GetTickCount();
