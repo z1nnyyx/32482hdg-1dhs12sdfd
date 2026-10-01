@@ -1515,22 +1515,42 @@ ManualMapper::Result ManualMapper::map_buffer(HANDLE process, const uint8_t* pe,
     const DWORD pid = GetProcessId(process);
     bool started = false;
 
-    // 1. IAT hook — MUST be tried first, before any thread operation.
-    //    Thread hijack, APC, and NtCreateThreadEx all trigger Hyperion's
-    //    shutdown response (STATUS_PROCESS_IS_TERMINATING / threads killed).
-    //    The ghost section mapping alone does NOT trigger termination, so the
-    //    IAT hook has a clean window here.  An existing Roblox thread calls
-    //    the hooked import naturally. Stub stays installed as the lasting tick.
+    // Trigger ladder — order matters. On current live builds the IAT hook
+    // reliably installs but the anti-cheat terminates the process while
+    // waiting for the hook to fire (observed: writable slot patched on
+    // NtUserPeekMessage, then STATUS_PROCESS_IS_TERMINATING within ~2s).
+    // Thread hijack has historically been silently reverted (safe: no
+    // termination), so try it FIRST — best case it works, worst case it
+    // fails without killing Roblox and we fall back.
     uintptr_t tick = 0;
     if (DWORD trva = export_rva(raw.data(), nt, "VT_TICK"))
         tick = remote_base + trva;
 
-    VT_LOG(L"ManualMap: trying IAT hook path (primary — no thread ops)");
     uintptr_t iat_slot = 0, iat_stub = 0, iat_orig = 0;
-    started = try_iat_hook(process, remote_base, entry, tick, tls_cbs, &iat_slot, &iat_stub, &iat_orig);
+
+    // 1. Thread hijack (primary). Redirects an existing Roblox thread to
+    //    stub_addr, which sets up (rcx=base, rdx=1, r8=0) and jumps to
+    //    entry — DllMain runs on that hijacked thread and returns cleanly
+    //    via the restore epilogue.
+    VT_LOG(L"ManualMap: trying thread hijack (primary — no image writes)");
+    started = start_via_hijack(process, (PVOID)stub_addr, (PVOID)remote_base, pid);
+
+    // 2. IAT hook (fallback). Known to draw termination on some builds,
+    //    but if hijack silently fails we lose nothing by trying it.
+    if (!started) {
+        VT_WARN(L"thread hijack did not fire DllMain — trying IAT hook");
+        started = try_iat_hook(process, remote_base, entry, tick, tls_cbs, &iat_slot, &iat_stub, &iat_orig);
+    }
+
+    // 3. NtCreateThreadEx (last resort). ETHREAD start address masked to
+    //    an ntdll gadget so the kernel sees a normal thread creation.
+    if (!started) {
+        VT_WARN(L"IAT hook did not fire DllMain — trying NtCreateThreadEx");
+        started = start_via_new_thread(process, (PVOID)gadget, (PVOID)stub_addr_b);
+    }
 
     if (!started) {
-        r.error = L"DllMain did not run — IAT hook never fired";
+        r.error = L"DllMain did not run — all three trigger paths failed";
         return r;
     }
     // Do not IAT-hook KERNEL32 NtWaitForSingleObject. That import is process-wide;

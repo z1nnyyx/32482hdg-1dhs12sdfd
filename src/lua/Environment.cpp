@@ -51,7 +51,12 @@ void Environment::bootstrap(lua_State* L) {
     a.setglobal(L, "shared");
 
     register_unc(L);
-    Execution::instance().enqueue(kInitScript, "=VoidTrace/init");
+    // kInitScript is Lua source, but Execution::run_now now expects
+    // pre-compiled Luau bytecode (compiled on the exe side before pipe send).
+    // The DLL does not link the Luau compiler. The exe queues the init
+    // bytecode via a normal MsgType::Execute on READY (see App.cpp),
+    // so this line is a no-op now.
+    (void)kInitScript;
 
     done_ = true;
     VT_LOG(L"Environment bootstrapped (UNC + hub aliases, no RAT)");

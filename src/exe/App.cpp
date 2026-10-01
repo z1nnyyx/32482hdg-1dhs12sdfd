@@ -12,6 +12,7 @@
 #include "exe/resource.h"
 #include "ext/World.h"
 #include "ext/Overlay.h"
+#include "ext/Bytecode.h"
 #include "shared/Config.h"
 #include "shared/Log.h"
 #include "shared/PipeKey.h"
@@ -1131,9 +1132,36 @@ void start_ext_esp() {
 }
 
 void try_corescript(const std::string& src, const std::wstring& nm) {
-    (void)src;
+    // Preferred path: DLL is inside Roblox and pipe is up.
+    // Compile source → Luau bytecode here (the exe links Luau's compiler;
+    // the DLL does not, to keep it small and unfingerprintable). Ship the
+    // bytecode blob over the pipe. The DLL runs it through luau_load +
+    // lua_pcall on the safe scheduler thread.
+    if (g_pipe.connected() && g_mod_ready && !src.empty()) {
+        auto [ok, bc] = vt::ext::compile_raw_luau_bytecode(src);
+        if (!ok) {
+            const std::wstring msg = bc.empty()
+                ? std::wstring(L"luau compile failed")
+                : (L"luau compile: " + utf8_to_wide(bc));
+            VT_ERR(L"Execute " + nm + L" → " + msg);
+            notify(L"Runtime", msg, 5000);
+            return;
+        }
+        g_pipe.send({MsgType::Execute, bc});
+        VT_LOG(L"Execute " + nm + L" → DLL (" +
+               std::to_wstring(bc.size()) + L" bytes bytecode)");
+        return;
+    }
+    // Fallback: no DLL, no pipe — the exe has no way to reach the Luau VM.
+    // Bring up the external overlay so at least ESP works, and tell the user
+    // exactly why their script did not run.
     start_ext_esp();
-    VT_LOG(L"Execute " + nm + L" → overlay (no Roblox bytecode)");
+    VT_LOG(L"Execute " + nm +
+           L" → overlay only (DLL not injected — scripts cannot execute; "
+           L"Rayfield / Drawing / hookmetamethod need in-process Luau)");
+    notify(L"Runtime",
+           L"Script cannot run — module is not inside Roblox. Overlay ESP is active.",
+           4500);
 }
 
 void flush_pending_exec() {
@@ -1678,18 +1706,85 @@ void attach_after_sync() {
     VT_LOG(L"Found Roblox  pid " + std::to_wstring(g_rbx->pid) +
            (g_rbx->path.empty() ? L"" : (L"  " + g_rbx->path)));
     g_attach_step = 4;
-    // Do not map a module. PeekMessage IAT + KERNEL32 wait-IAT closed Roblox.
-    // Execute is host-side corescript bytecode (Xeno-style). ManualMap stays compiled.
-    g_injected = true;
-    g_mapped_pid = g_rbx->pid;
-    g_map_tick = 0;
-    g_mod_ready = true;
-    g_iat_slot = g_iat_stub = g_iat_orig = 0;
-    g_iat_restored = true;
-    g_wait_hooked = false;
-    VT_LOG(L"external attach — no module map");
-    set_progress(100, L"READY");
-    notify(L"Runtime", L"Attached  ·  READY");
+    // If the user has opted in (config.auto_inject = true, default), try to
+    // put the DLL into RobloxPlayerBeta so scripts can actually reach the
+    // Luau VM. Manual-map first (harder for Hyperion to fingerprint than
+    // LoadLibrary + CreateRemoteThread). If that returns without a live
+    // pipe within ~4s, fall back to LoadLibrary. If BOTH fail, fall through
+    // to the historical external-only path — overlay ESP still works and
+    // Roblox is left alone.
+    //
+    // Prior comment ("PeekMessage IAT + KERNEL32 wait-IAT closed Roblox")
+    // referred to specific IAT hooks the manual-mapper installs post-map;
+    // Hyperion catches them on some builds and terminates. Those hooks are
+    // enabled inside map_module()/InjectResult and are undone by ExtHook
+    // request from the DLL. If Roblox dies on your build, flip
+    // "auto_inject" to false in config/offsets.json.
+    // Always attempt injection on attach. The prior gate (g_auto_inject)
+    // was silently disabled in some users' cached configs at
+    // %LOCALAPPDATA%\WinAppCache\config\offsets.json, which turned the
+    // attach into overlay-only mode without any obvious signal. Users who
+    // truly want overlay-only can delete the DLL from the resource or
+    // exit before F5 — the injection attempt itself is bounded to ~8s.
+    bool injected_ok = false;
+    {
+        set_progress(30, L"injecting…");
+        VT_LOG(L"attempting manual-map (forced on attach)");
+        if (map_module()) {
+            // Wait briefly for the DLL to call back on the pipe.
+            const DWORD start = GetTickCount();
+            while (GetTickCount() - start < 4000) {
+                if (g_pipe.connected() && g_mod_ready) { injected_ok = true; break; }
+                Sleep(50);
+            }
+            if (!injected_ok)
+                VT_WARN(L"manual-map: DLL did not report READY in 4s "
+                        L"(Hyperion may have blocked callback)");
+        } else {
+            VT_WARN(L"manual-map failed — trying LoadLibrary fallback");
+            HANDLE proc = ProcessFinder::open(g_rbx->pid,
+                PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE |
+                PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION);
+            if (proc) {
+                auto r = Injector::inject_embedded(proc, InjectMethod::LoadLibrary);
+                CloseHandle(proc);
+                if (r.ok) {
+                    g_injected = true;
+                    g_mapped_pid = g_rbx->pid;
+                    g_map_tick = GetTickCount();
+                    VT_LOG(L"LoadLibrary injected " + format_hex(r.module_base));
+                    const DWORD start = GetTickCount();
+                    while (GetTickCount() - start < 4000) {
+                        if (g_pipe.connected() && g_mod_ready) { injected_ok = true; break; }
+                        Sleep(50);
+                    }
+                } else {
+                    VT_ERR(L"LoadLibrary inject failed: " + r.error);
+                }
+            }
+        }
+        if (injected_ok) {
+            VT_LOG(L"DLL live — scripts will run in Roblox");
+            set_progress(100, L"READY  ·  DLL live");
+            notify(L"Runtime", L"Attached  ·  scripts can run");
+        } else {
+            VT_WARN(L"injection did not stick — overlay-only mode");
+            notify(L"Runtime",
+                   L"DLL did not attach (likely Hyperion). Overlay ESP only.", 5000);
+        }
+    }
+    if (!injected_ok) {
+        g_injected = true;
+        g_mapped_pid = g_rbx->pid;
+        g_map_tick = 0;
+        g_mod_ready = true;
+        g_iat_slot = g_iat_stub = g_iat_orig = 0;
+        g_iat_restored = true;
+        g_wait_hooked = false;
+        VT_LOG(L"external attach — no module map");
+        set_progress(100, L"READY");
+        notify(L"Runtime", L"Attached  ·  READY");
+    }
     std::vector<ext::Entity> ents;
     int sw = 0, sh = 0;
     g_rpm.poll(ents, &sw, &sh);

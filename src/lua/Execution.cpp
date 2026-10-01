@@ -142,6 +142,14 @@ ExecResult Execution::run_now(const std::string& source, const std::string& chun
         return r;
     }
 
+    // luau_load expects Luau bytecode. The exe compiles source → bytecode
+    // before sending on the pipe, so `source` here is already a bytecode blob.
+    // Empty payload is nothing to run.
+    if (source.empty()) {
+        r.error = "empty bytecode payload";
+        return r;
+    }
+
     ExecGuard guard;
     SehExec s{};
     s.L = L_;

@@ -378,12 +378,31 @@ void LuaApi::getglobal(lua_State* L, const char* name) const {
 }
 
 namespace {
+// Roblox layout: extra space sits immediately before lua_State, and its first
+// pointer-sized field is a Userthread* holding identity + capabilities. Dereferencing
+// (uint8_t**)(L - extra_space) yields that Userthread. `identity` is the offset
+// inside Userthread of the int32 identity field.
+//
+// If either offset is 0, or the Userthread pointer is null / not plausibly a
+// pointer, bail out. The previous fallback added `extra` to L directly, which
+// on a stale config wrote INSIDE the lua_State struct and corrupted the VM.
+inline uint8_t* resolve_userthread(lua_State* L, uintptr_t extra) {
+    if (!L || !extra)
+        return nullptr;
+    uint8_t* slot = (uint8_t*)L - extra;
+    uint8_t* ut = *(uint8_t**)slot;
+    // A real userthread pointer is 8-byte aligned and above 0x10000.
+    if ((uintptr_t)ut < 0x10000 || ((uintptr_t)ut & 0x7))
+        return nullptr;
+    return ut;
+}
+
 int seh_write_identity(lua_State* L, uintptr_t extra, uintptr_t off, int identity) {
     __try {
-        uint8_t* extra_ptr = extra ? *(uint8_t**)((uint8_t*)L - extra) : nullptr;
-        if (!extra_ptr)
-            extra_ptr = (uint8_t*)L + extra;
-        *(int*)(extra_ptr + off) = identity;
+        uint8_t* ut = resolve_userthread(L, extra);
+        if (!ut)
+            return 0;
+        *(int*)(ut + off) = identity;
         return 1;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -391,10 +410,10 @@ int seh_write_identity(lua_State* L, uintptr_t extra, uintptr_t off, int identit
 }
 int seh_read_identity(lua_State* L, uintptr_t extra, uintptr_t off, int* out) {
     __try {
-        uint8_t* extra_ptr = extra ? *(uint8_t**)((uint8_t*)L - extra) : nullptr;
-        if (!extra_ptr)
-            extra_ptr = (uint8_t*)L + extra;
-        *out = *(int*)(extra_ptr + off);
+        uint8_t* ut = resolve_userthread(L, extra);
+        if (!ut)
+            return 0;
+        *out = *(int*)(ut + off);
         return 1;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
@@ -425,9 +444,7 @@ uint8_t* LuaApi::extraspace(lua_State* L) const {
     const auto extra = OffsetResolver::current().table.extra_space;
     uint8_t* p = nullptr;
     __try {
-        p = extra ? *(uint8_t**)((uint8_t*)L - extra) : nullptr;
-        if (!p)
-            p = (uint8_t*)L + extra;
+        p = resolve_userthread(L, extra);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         p = nullptr;
     }
