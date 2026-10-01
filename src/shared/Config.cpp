@@ -136,6 +136,7 @@ bool Config::load(const std::filesystem::path& file) {
     cfg_.auto_attach  = extract_bool(json, "auto_attach", cfg_.auto_attach);
     cfg_.auto_inject  = extract_bool(json, "auto_inject", cfg_.auto_inject);
     cfg_.uwp_mode     = extract_bool(json, "uwp_mode",    cfg_.uwp_mode);
+    cfg_.studio_mode  = extract_bool(json, "studio_mode", cfg_.studio_mode);
 
     VT_LOG(L"Loaded offsets for " + utf8_to_wide(o.roblox_version.empty() ? "unknown" : o.roblox_version));
     return true;
@@ -154,6 +155,7 @@ bool Config::save(const std::filesystem::path& file) const {
        << "  \"auto_attach\": " << (cfg_.auto_attach ? "true" : "false") << ",\n"
        << "  \"auto_inject\": " << (cfg_.auto_inject ? "true" : "false") << ",\n"
        << "  \"uwp_mode\": "    << (cfg_.uwp_mode    ? "true" : "false") << ",\n"
+       << "  \"studio_mode\": " << (cfg_.studio_mode ? "true" : "false") << ",\n"
        << "  \"task_scheduler\": \"" << hx(o.task_scheduler) << "\",\n"
        << "  \"job_name\": \"" << hx(o.job_name) << "\",\n"
        << "  \"job_start\": \"" << hx(o.job_start) << "\",\n"

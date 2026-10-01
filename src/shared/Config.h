@@ -93,6 +93,10 @@ struct AppConfig {
     // so standard user-mode primitives work. This is the trick behind every
     // "it just works" open-source executor (Xeno, Celery, Electron, etc.).
     bool uwp_mode             = true;
+    // When true, target Roblox Studio instead of the Player. Studio ships
+    // no Hyperion component at all — every injection primitive just works.
+    // Takes precedence over uwp_mode when set.
+    bool studio_mode          = false;
     OffsetTable offsets;
 };
 
