@@ -32,6 +32,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 #include <optional>
@@ -84,6 +85,7 @@ constexpr UINT WM_LOG_WAKE = WM_APP + 21;
 constexpr UINT WM_JOB_HINT = WM_APP + 22;
 constexpr UINT WM_PROG = WM_APP + 25;
 constexpr UINT WM_ATTACH_CONT = WM_APP + 26;
+constexpr UINT WM_RACE_ATTACH = WM_APP + 27;   // fired by race-attach watcher thread on rising edge
 constexpr UINT ID_HOT_TOGGLE = 0x71;
 
 constexpr int kTitleH = 34;
@@ -418,6 +420,8 @@ void tray_del() {
     g_nid = {};
 }
 
+static void stop_race_watcher();
+
 void request_exit() {
     if (!g_wnd)
         return;
@@ -425,6 +429,7 @@ void request_exit() {
     HWND log = g_log_wnd;
     g_wnd = nullptr;
     g_log_wnd = nullptr;
+    stop_race_watcher();
     g_rpm.detach();
     tray_del();
     g_pipe.stop();
@@ -893,6 +898,65 @@ void set_editor(const std::wstring& s) {
 void layout_edits(HWND wnd);
 void run_autoexec();
 
+// ─── Race-attach watcher ─────────────────────────────────────────────────────
+// Hyperion/Byfron is loaded by RobloxPlayerBeta.exe shortly after process
+// creation, but there is a small window (TLS callbacks → DllMain of
+// RobloxStudioMod → first self-integrity sweep) during which user-mode
+// injection can still land. Four conventional primitives have been proven
+// caught against the current build; the one untried path is to detect the
+// process at its earliest observable moment and manual-map before Hyperion
+// finishes arming. This watcher polls at ~20 ms and fires a WM_RACE_ATTACH
+// to the UI thread on rising edge (no PID → PID present) so do_attach()
+// runs as early as possible.
+static std::atomic<bool> g_race_watch_run{false};
+static std::atomic<DWORD> g_race_last_pid{0};
+static std::thread g_race_thread;
+
+static void race_attach_watcher() {
+    using namespace std::chrono_literals;
+    const auto pname = Config::instance().get().process_name;
+    while (g_race_watch_run.load(std::memory_order_relaxed)) {
+        // Fast exit if we're already attached to a live Roblox.
+        if (g_rbx && g_injected && ProcessFinder::still_alive(g_rbx->pid)) {
+            g_race_last_pid = g_rbx->pid;
+            std::this_thread::sleep_for(250ms);
+            continue;
+        }
+        if (!g_auto_attach || g_attach_busy.load()) {
+            std::this_thread::sleep_for(100ms);
+            continue;
+        }
+        auto rp = ProcessFinder::find(pname);
+        const DWORD cur = rp ? rp->pid : 0;
+        const DWORD prev = g_race_last_pid.load();
+        if (cur && cur != prev) {
+            // Rising edge — brand-new Roblox process. Fire immediately; the
+            // sooner we touch it, the better our odds against Hyperion's
+            // arming routine. Give it a tiny grace (~40 ms) so the image
+            // finishes mapping and the main thread exists.
+            std::this_thread::sleep_for(40ms);
+            g_race_last_pid = cur;
+            if (g_wnd)
+                PostMessageW(g_wnd, WM_RACE_ATTACH, (WPARAM)cur, 0);
+        } else if (!cur && prev) {
+            g_race_last_pid = 0;
+        }
+        std::this_thread::sleep_for(20ms);
+    }
+}
+
+static void start_race_watcher() {
+    if (g_race_watch_run.exchange(true))
+        return;
+    g_race_thread = std::thread(race_attach_watcher);
+}
+
+static void stop_race_watcher() {
+    g_race_watch_run = false;
+    if (g_race_thread.joinable())
+        g_race_thread.join();
+}
+
 static void do_deferred_init() {
     g_init_step = 0; enable_debug_privilege();
     g_init_step = 1; Syscalls::get().init();
@@ -902,13 +966,21 @@ static void do_deferred_init() {
     g_init_step = 5; Payload::seed();
     g_init_step = 6; Config::instance().load(data_root() / L"config" / L"offsets.json");
     auto& cfg = Config::instance().get();
-    cfg.auto_attach = false;
-    g_auto_attach = false;
+    // Default auto-attach ON so the race watcher below actually fires on a
+    // fresh install. User can still toggle via settings.
+    cfg.auto_attach = true;
+    g_auto_attach = true;
     g_auto_inject = cfg.auto_inject;
     g_show_log = false;
     g_stream_proof = false;
     apply_capture_all();
     Config::instance().save(data_root() / L"config" / L"offsets.json");
+    // Seed the "last seen" PID so an already-running Roblox at launch isn't
+    // treated as a rising edge (that case is handled by the normal
+    // auto-attach path, not the race watcher).
+    if (auto rp = ProcessFinder::find(cfg.process_name))
+        g_race_last_pid = rp->pid;
+    start_race_watcher();
     g_init_step = -1;
     g_init_done  = true;
 }
@@ -2670,6 +2742,19 @@ LRESULT CALLBACK wndproc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ATTACH_CONT:
         invalidate();
         return 0;
+    case WM_RACE_ATTACH: {
+        // Rising-edge from the watcher: a fresh Roblox PID appeared. Only
+        // fire if we're still unattached and not mid-attach — the watcher
+        // double-checks, but the UI thread wins on correctness.
+        const DWORD race_pid = (DWORD)wp;
+        if (!g_init_done || !g_auto_attach || g_attach_busy.load())
+            return 0;
+        if (g_rbx && g_injected && ProcessFinder::still_alive(g_rbx->pid))
+            return 0;
+        VT_LOG(L"Race-attach: firing on fresh PID " + std::to_wstring(race_pid));
+        do_attach();
+        return 0;
+    }
     case WM_SIZE:
         layout_edits(wnd);
         invalidate();
