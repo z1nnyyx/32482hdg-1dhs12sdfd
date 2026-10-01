@@ -87,6 +87,12 @@ struct AppConfig {
     bool auto_inject          = true;
     bool auto_exec_on_inject  = true;
     int  attach_poll_ms       = 750;
+    // When true, ProcessFinder looks for the UWP (Microsoft Store) Roblox
+    // install path only: %LOCALAPPDATA%\Packages\ROBLOXCORPORATION.ROBLOX_*\.
+    // That build does NOT ship Hyperion's kernel driver (Store app policy),
+    // so standard user-mode primitives work. This is the trick behind every
+    // "it just works" open-source executor (Xeno, Celery, Electron, etc.).
+    bool uwp_mode             = true;
     OffsetTable offsets;
 };
 

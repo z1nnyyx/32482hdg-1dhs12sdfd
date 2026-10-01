@@ -130,7 +130,7 @@ enum HitId : int {
     H_NONE = 0, H_MIN, H_MAX, H_CLOSE,
     H_GEAR, H_OPEN, H_SAVE, H_CLEAR,
     H_ATTACH, H_INJECT, H_ESP, H_SCRIPTS, H_TOPMOST, H_EXECUTE, H_NEWTAB,
-    H_SETLOG, H_SETHELP, H_SETINJ, H_SETESP, H_SETMAP, H_SETBACK, H_SETAUTO, H_SETSTARS,
+    H_SETLOG, H_SETHELP, H_SETINJ, H_SETESP, H_SETMAP, H_SETBACK, H_SETAUTO, H_SETSTARS, H_SETUWP,
     H_TAB0 = 200, H_TABX0 = 400, H_FILE0 = 600,
 };
 
@@ -2464,12 +2464,15 @@ void paint(HWND wnd) {
 
         toggle_row(168, H_SETAUTO, L"Auto-Attach",
                    L"Automatically attach when Roblox opens", g_auto_attach);
-        toggle_row(220, H_SETLOG,  L"Output Log",
+        toggle_row(220, H_SETUWP,  L"UWP Mode (Store Roblox)",
+                   L"Target the Microsoft Store build — no Hyperion driver",
+                   Config::instance().get().uwp_mode);
+        toggle_row(272, H_SETLOG,  L"Output Log",
                    L"Open a second VoidTrace window for logs", g_show_log);
-        toggle_row(272, H_SETESP,  L"Stream Proof",
+        toggle_row(324, H_SETESP,  L"Stream Proof",
                    L"Hide this UI from OBS / Discord. Off = show on stream",
                    g_stream_proof);
-        toggle_row(324, H_SETSTARS, L"Star Field",
+        toggle_row(376, H_SETSTARS, L"Star Field",
                    L"Animated starfield — stars drift and repel from cursor",
                    g_stars_enabled);
     } else if (g_scripts_open) {
@@ -2599,6 +2602,19 @@ void click(int id) {
             Config::instance().get().auto_attach = g_auto_attach;
         Config::instance().save(data_root() / L"config" / L"offsets.json");
         toast(g_auto_attach ? L"Auto-attach ON" : L"Auto-attach OFF");
+        invalidate();
+        return;
+    }
+    if (id == H_SETUWP) {
+        auto& cfg = Config::instance().get();
+        cfg.uwp_mode = !cfg.uwp_mode;
+        Config::instance().save(data_root() / L"config" / L"offsets.json");
+        // Reset race-attach PID cache so the watcher re-targets immediately.
+        g_race_last_pid = 0;
+        toast(cfg.uwp_mode ? L"UWP Mode ON — targeting Store Roblox"
+                           : L"UWP Mode OFF — targeting legacy Roblox");
+        VT_LOG(cfg.uwp_mode ? L"UWP mode enabled (Store build)"
+                            : L"UWP mode disabled (legacy build)");
         invalidate();
         return;
     }
