@@ -1543,49 +1543,62 @@ ManualMapper::Result ManualMapper::map_buffer(HANDLE process, const uint8_t* pe,
     const DWORD pid = GetProcessId(process);
     bool started = false;
 
-    // Trigger ladder — order matters. On current live builds the IAT hook
-    // reliably installs but the anti-cheat terminates the process while
-    // waiting for the hook to fire (observed: writable slot patched on
-    // NtUserPeekMessage, then STATUS_PROCESS_IS_TERMINATING within ~2s).
-    // Thread hijack has historically been silently reverted (safe: no
-    // termination), so try it FIRST — best case it works, worst case it
-    // fails without killing Roblox and we fall back.
+    // Trigger ladder — order depends on the target.
+    //
+    // UWP/GDK (Store Roblox):
+    //   No Hyperion kernel driver, but AppContainer sandbox limits some APIs.
+    //   Thread hijack crashes the GDK process (SetThreadContext side-effects
+    //   terminate it). NtCreateThreadEx is safest — try it FIRST.
+    //   Order: NtCreateThreadEx → APC → IAT hook → thread hijack (last resort).
+    //
+    // Legacy (website Roblox):
+    //   Hyperion's kernel driver reverts SetThreadContext silently (safe) and
+    //   kills the process on IAT hook detection (~2 s). Thread hijack is the
+    //   best chance (no image writes, no new threads).
+    //   Order: thread hijack → IAT hook → NtCreateThreadEx → APC.
+    const bool uwp = Config::instance().get().uwp_mode;
     uintptr_t tick = 0;
     if (DWORD trva = export_rva(raw.data(), nt, "VT_TICK"))
         tick = remote_base + trva;
 
     uintptr_t iat_slot = 0, iat_stub = 0, iat_orig = 0;
+    const uintptr_t safe_stub = stub_valloc_b ? stub_valloc_b : stub_addr_b;
 
-    // 1. Thread hijack (primary). Redirects an existing Roblox thread to
-    //    stub_addr, which sets up (rcx=base, rdx=1, r8=0) and jumps to
-    //    entry — DllMain runs on that hijacked thread and returns cleanly
-    //    via the restore epilogue.
-    VT_LOG(L"ManualMap: trying thread hijack (primary — no image writes)");
-    started = start_via_hijack(process, (PVOID)stub_addr, (PVOID)remote_base, pid);
-
-    // 2. IAT hook (fallback). Known to draw termination on some builds,
-    //    but if hijack silently fails we lose nothing by trying it.
-    if (!started) {
-        VT_WARN(L"thread hijack did not fire DllMain — trying IAT hook");
-        started = try_iat_hook(process, remote_base, entry, tick, tls_cbs, &iat_slot, &iat_stub, &iat_orig);
-    }
-
-    // 3. NtCreateThreadEx (last resort). ETHREAD start address masked to
-    //    an ntdll gadget so the kernel sees a normal thread creation.
-    //    Use CFG-marked VirtualAlloc stub when available (MEM_PRIVATE can be
-    //    registered in the CFG bitmap; MEM_MAPPED ghost section cannot).
-    if (!started) {
-        const uintptr_t safe_stub = stub_valloc_b ? stub_valloc_b : stub_addr_b;
-        VT_WARN(L"IAT hook did not fire DllMain — trying NtCreateThreadEx (stub=0x" +
-                [&]{ wchar_t b[20]; swprintf_s(b, L"%llX", (ULONGLONG)safe_stub); return std::wstring(b); }() + L")");
+    if (uwp) {
+        // ── UWP/GDK trigger order ───────────────────────────────────────
+        VT_LOG(L"ManualMap: UWP mode — trying NtCreateThreadEx first");
         started = start_via_new_thread(process, (PVOID)gadget, (PVOID)safe_stub);
-    }
 
-    // 4. APC injection — queue to every Roblox thread.
-    if (!started) {
-        const uintptr_t safe_stub = stub_valloc_b ? stub_valloc_b : stub_addr_b;
-        VT_WARN(L"NtCreateThreadEx did not fire DllMain — trying APC injection");
-        started = start_via_apc(process, (PVOID)safe_stub, pid);
+        if (!started) {
+            VT_WARN(L"NtCreateThreadEx did not fire DllMain — trying APC injection");
+            started = start_via_apc(process, (PVOID)safe_stub, pid);
+        }
+        if (!started) {
+            VT_WARN(L"APC did not fire DllMain — trying IAT hook");
+            started = try_iat_hook(process, remote_base, entry, tick, tls_cbs, &iat_slot, &iat_stub, &iat_orig);
+        }
+        if (!started) {
+            VT_WARN(L"IAT hook did not fire DllMain — trying thread hijack (last resort for UWP)");
+            started = start_via_hijack(process, (PVOID)stub_addr, (PVOID)remote_base, pid);
+        }
+    } else {
+        // ── Legacy trigger order ─────────────────────────────────────────
+        VT_LOG(L"ManualMap: legacy mode — trying thread hijack first");
+        started = start_via_hijack(process, (PVOID)stub_addr, (PVOID)remote_base, pid);
+
+        if (!started) {
+            VT_WARN(L"thread hijack did not fire DllMain — trying IAT hook");
+            started = try_iat_hook(process, remote_base, entry, tick, tls_cbs, &iat_slot, &iat_stub, &iat_orig);
+        }
+        if (!started) {
+            VT_WARN(L"IAT hook did not fire DllMain — trying NtCreateThreadEx (stub=0x" +
+                    [&]{ wchar_t b[20]; swprintf_s(b, L"%llX", (ULONGLONG)safe_stub); return std::wstring(b); }() + L")");
+            started = start_via_new_thread(process, (PVOID)gadget, (PVOID)safe_stub);
+        }
+        if (!started) {
+            VT_WARN(L"NtCreateThreadEx did not fire DllMain — trying APC injection");
+            started = start_via_apc(process, (PVOID)safe_stub, pid);
+        }
     }
 
     if (!started) {
