@@ -3127,6 +3127,8 @@ LRESULT CALLBACK wndproc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         persist_tabs();
         g_rpm.detach();
+        stop_race_watcher();                // join the background watcher
+        ext::Overlay::instance().stop();    // kill the ESP/overlay thread
         UnregisterHotKey(wnd, ID_HOT_TOGGLE);
         tray_del();
         g_pipe.stop();
@@ -3144,6 +3146,11 @@ LRESULT CALLBACK wndproc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_brLog) DeleteObject(g_brLog);
         if (g_logo) DeleteObject(g_logo);
         PostQuitMessage(0);
+        // Hard-exit: a detached worker thread (overlay poll, HTTP fetch,
+        // offset-sync RPM) can keep the process alive after the message
+        // loop drains. TerminateProcess guarantees the taskbar + Task
+        // Manager see us gone the moment the X is clicked.
+        ExitProcess(0);
         return 0;
     }
     return DefWindowProcW(wnd, msg, wp, lp);
