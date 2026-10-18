@@ -421,6 +421,7 @@ void tray_del() {
 }
 
 static void stop_race_watcher();
+static bool launch_store_roblox();
 
 void request_exit() {
     if (!g_wnd)
@@ -975,11 +976,21 @@ static void do_deferred_init() {
     g_stream_proof = false;
     apply_capture_all();
     Config::instance().save(data_root() / L"config" / L"offsets.json");
-    // Seed the "last seen" PID so an already-running Roblox at launch isn't
-    // treated as a rising edge (that case is handled by the normal
-    // auto-attach path, not the race watcher).
-    if (auto rp = ProcessFinder::find(cfg.process_name))
-        g_race_last_pid = rp->pid;
+    // Xeno-style auto-launch: if we're in UWP mode (default), no Roblox is
+    // running, and auto-attach is on, kick off Store Roblox ourselves so
+    // the race watcher attaches to it as soon as it appears. The user
+    // never touches a Start Menu entry — they open VoidTrace and Roblox
+    // comes up pre-attached.
+    const auto existing = ProcessFinder::find(cfg.process_name);
+    if (existing) {
+        g_race_last_pid = existing->pid;
+    } else if (cfg.auto_attach && cfg.uwp_mode && !cfg.studio_mode) {
+        if (launch_store_roblox()) {
+            VT_LOG(L"Auto-launched Store Roblox on startup — awaiting race-attach");
+        } else {
+            VT_WARN(L"Store Roblox not installed — showing install prompt");
+        }
+    }
     start_race_watcher();
     g_init_step = -1;
     g_init_done  = true;
