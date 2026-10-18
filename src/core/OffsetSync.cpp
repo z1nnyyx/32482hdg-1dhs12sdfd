@@ -72,7 +72,7 @@ bool looks_code_byte(uint8_t b) {
 }
 
 std::string job_name(ext::Memory& mem, uintptr_t job) {
-    const int offs[] = { 0x18, 0x10, 0x20, 0x28, 0x30 };
+    const int offs[] = { 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48, 0x50 };
     for (int o : offs) {
         auto s = mem.rstring(job + o);
         if (s.size() >= 3)
@@ -84,7 +84,13 @@ std::string job_name(ext::Memory& mem, uintptr_t job) {
 int score_task_scheduler(ext::Memory& mem, uintptr_t ts) {
     if (!looks_heap(ts) && !(ts > 0x10000 && ts < 0x00007FFFFFFFFFFFULL))
         return 0;
-    const int starts[] = { 0xC8, 0xD0, 0x118, 0x120, 0x128, 0x188, 0x198, 0x1D0, 0x208 };
+    const int starts[] = {
+        0xC8, 0xD0, 0xD8, 0xE0, 0xE8, 0xF0, 0xF8, 0x100, 0x108,
+        0x110, 0x118, 0x120, 0x128, 0x130, 0x138, 0x140, 0x148,
+        0x150, 0x158, 0x160, 0x168, 0x170, 0x178, 0x180, 0x188,
+        0x190, 0x198, 0x1A0, 0x1A8, 0x1B0, 0x1B8, 0x1C0, 0x1C8,
+        0x1D0, 0x1D8, 0x1E0, 0x1E8, 0x1F0, 0x1F8, 0x200, 0x208,
+    };
     int best = 0;
     for (int st : starts) {
         const uintptr_t b = mem.read_ptr(ts + st);
@@ -133,14 +139,15 @@ bool is_task_scheduler(ext::Memory& mem, uintptr_t ts) {
 bool is_datamodel(ext::Memory& mem, uintptr_t dm) {
     if (!looks_heap(dm))
         return false;
-    const uintptr_t child[] = { 0x60, 0x68, 0x70, 0x78, 0x80, 0x88 };
-    const uintptr_t names[] = { 0xB0, 0x70, 0x48, 0x50, 0x88, 0x8, 0x28, 0x30 };
-    auto has_players = [&](uintptr_t b, uintptr_t e, uintptr_t stride) {
+    const uintptr_t child[] = { 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90, 0x98, 0xA0 };
+    const uintptr_t names[] = { 0x8, 0x28, 0x30, 0x48, 0x50, 0x58, 0x68, 0x70, 0x78, 0x88, 0x90, 0xA8, 0xB0 };
+    auto count_services = [&](uintptr_t b, uintptr_t e, uintptr_t stride) -> int {
         if (!looks_heap(b) || !looks_heap(e) || e <= b)
-            return false;
+            return 0;
         const uintptr_t n = (e - b) / stride;
         if (n < 3 || n > 256)
-            return false;
+            return 0;
+        int found = 0;
         int step = 0;
         for (uintptr_t it = b; it + 8 <= e && step < 80; it += stride, ++step) {
             const uintptr_t ch = mem.read_ptr(it);
@@ -153,21 +160,24 @@ bool is_datamodel(ext::Memory& mem, uintptr_t dm) {
                     if (p > 0x10000)
                         s = mem.rstring_ptr(p);
                 }
-                if (s == "Players")
-                    return true;
+                if (s == "Players" || s == "Workspace" || s == "Lighting" ||
+                    s == "ReplicatedStorage" || s == "CoreGui")
+                    ++found;
+                if (found >= 2)
+                    return found;
             }
         }
-        return false;
+        return found;
     };
     for (uintptr_t co : child) {
         const uintptr_t a = mem.read_ptr(dm + co);
         const uintptr_t b = mem.read_ptr(dm + co + 8);
-        if (has_players(a, b, 8) || has_players(a, b, 16))
+        if (count_services(a, b, 8) >= 2 || count_services(a, b, 16) >= 2)
             return true;
         if (looks_heap(a)) {
             const uintptr_t w0 = mem.read_ptr(a);
             const uintptr_t w1 = mem.read_ptr(a + 8);
-            if (has_players(w0, w1, 8) || has_players(w0, w1, 16))
+            if (count_services(w0, w1, 8) >= 2 || count_services(w0, w1, 16) >= 2)
                 return true;
         }
     }
@@ -175,7 +185,11 @@ bool is_datamodel(ext::Memory& mem, uintptr_t dm) {
 }
 
 uintptr_t follow_fake(ext::Memory& mem, uintptr_t fake, uintptr_t& used_off) {
-    const uintptr_t offs[] = { 0x1D8, 0x1C0, 0x1B8, 0x1E0, 0x198, 0x1A8, 0x1F0, 0x200, 0 };
+    const uintptr_t offs[] = {
+        0x1A0, 0x1A8, 0x1B0, 0x1B8, 0x1C0, 0x1C8, 0x1D0, 0x1D8,
+        0x1E0, 0x1E8, 0x1F0, 0x1F8, 0x200, 0x208, 0x210, 0x218,
+        0x188, 0x190, 0x198, 0
+    };
     for (uintptr_t o : offs) {
         const uintptr_t dm = o ? mem.read_ptr(fake + o) : fake;
         if (is_datamodel(mem, dm)) {
@@ -378,6 +392,16 @@ bool OffsetSync::refresh() {
         "48 89 5C 24 ?? 57 48 83 EC ?? 48 8B F9 48 8B 49 ?? E8 ?? ?? ?? ?? 48 85 C0 74",
         "40 57 48 83 EC ?? 48 8B F9 E8 ?? ?? ?? ?? 48 8B D8 48 85 C0 74 ?? 48 8B 4F",
         "40 57 48 83 EC ?? 48 8B F9 E8 ?? ?? ?? ?? 48 8B CF E8 ?? ?? ?? ?? 48 85 C0",
+        // Broader patterns: newthread allocates a lua_State then copies globals
+        "48 89 5C 24 ?? 48 89 6C 24 ?? 57 48 83 EC ?? 48 8B F9 E8 ?? ?? ?? ?? 48 85 C0",
+        "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? 48 8B D9 E8",
+        "40 53 48 83 EC ?? 48 8B D9 E8 ?? ?? ?? ?? 48 8B C8 48 85 C0 74",
+        "48 89 5C 24 ?? 57 48 83 EC ?? 48 8B D9 E8 ?? ?? ?? ?? 48 85 C0 74",
+        "40 55 48 83 EC ?? 48 8B E9 E8 ?? ?? ?? ?? 48 85 C0 74",
+        "48 89 5C 24 ?? 56 48 83 EC ?? 48 8B F1 E8 ?? ?? ?? ?? 48 85 C0 74",
+        // Patterns with mov rcx,[rcx+off] before call (indirect global_State access)
+        "48 89 5C 24 ?? 57 48 83 EC ?? 48 8B F9 48 8B 49 ?? E8 ?? ?? ?? ?? 48 85 C0",
+        "40 53 48 83 EC ?? 48 8B D9 48 8B 49 ?? E8 ?? ?? ?? ?? 48 85 C0",
     }, L"lua_newthread");
     take_lua(o.lua_pushcclosure, proc, rp->base, rp->size, {
         "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 83 EC ?? 4D 8B F9 49 8B F0",
@@ -396,6 +420,7 @@ bool OffsetSync::refresh() {
     }, L"lua_setreadonly");
     }
 
+    // ── TaskScheduler auto-scan ────────────────────────────────────────
     {
         const int have = o.task_scheduler
             ? score_task_scheduler(mem, mem.read_ptr(rp->base + o.task_scheduler)) : 0;
@@ -407,7 +432,9 @@ bool OffsetSync::refresh() {
         uintptr_t best_rva = have >= 80 ? o.task_scheduler : 0;
         int best_sc = have >= 80 ? have : 0;
         const uintptr_t kTsTry[] = {
-            0x83B1A00, 0x8ABD728, 0x8A44D68, 0x8CA9CC8
+            0x83B1A00, 0x8ABD728, 0x8A44D68, 0x8CA9CC8,
+            0x8D5A700, 0x8E28F00, 0x8F01C00, 0x9038A00,
+            0x90BC800, 0x9148600, 0x920D400, 0x92F2200,
         };
         for (uintptr_t rva : kTsTry) {
             const uintptr_t val = mem.read_ptr(rp->base + rva);
@@ -419,6 +446,8 @@ bool OffsetSync::refresh() {
                 best_rva = rva;
             }
         }
+
+        // Phase 1: scan code for `mov reg,[rip+disp]` referencing TS global
         const DWORD ts0 = GetTickCount();
         if (best_sc < 80)
         each_region(proc, rp->base, rp->size, PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE,
@@ -444,11 +473,155 @@ bool OffsetSync::refresh() {
                     }
                 }
             });
+
+        // Phase 2: brute-force .data scan — walk every qword in writable
+        // regions of the image and test if the pointed-to object looks like TS.
+        if (best_sc < 80) {
+            VT_LOG(L"TS code-ref scan failed, trying .data brute-force");
+            const DWORD ts1 = GetTickCount();
+            each_region(proc, rp->base, rp->size, PAGE_READWRITE,
+                [&](uintptr_t at, const uint8_t* img, size_t n) {
+                    if (best_sc >= 80 || GetTickCount() - ts1 > 6000)
+                        return;
+                    for (size_t i = 0; i + 8 <= n; i += 8) {
+                        uintptr_t val;
+                        std::memcpy(&val, img + i, 8);
+                        if (!looks_heap(val))
+                            continue;
+                        const int sc = score_task_scheduler(mem, val);
+                        if (sc > best_sc) {
+                            best_sc = sc;
+                            best_rva = (at + i) - rp->base;
+                        }
+                    }
+                });
+        }
+
         if (best_rva && best_sc >= 80) {
             o.task_scheduler = best_rva;
             VT_LOG(L"auto task_scheduler " + format_hex(o.task_scheduler) +
                    L" score " + std::to_wstring(best_sc));
         }
+    }
+
+    // ── DataModel auto-scan ─────────────────────────────────────────────
+    if (!o.fake_datamodel) {
+        VT_LOG(L"DataModel: starting auto-scan");
+        uintptr_t dm_rva = 0;
+
+        // Phase 1: code-ref scan — `mov reg,[rip+disp]` → follow_fake
+        const DWORD dm0 = GetTickCount();
+        each_region(proc, rp->base, rp->size, PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE,
+            [&](uintptr_t at, const uint8_t* img, size_t n) {
+                if (dm_rva || GetTickCount() - dm0 > 5000)
+                    return;
+                for (size_t i = 0; i + 7 < n; ++i) {
+                    if (img[i] != 0x48 || img[i + 1] != 0x8B)
+                        continue;
+                    if (img[i + 2] != 0x0D && img[i + 2] != 0x05)
+                        continue;
+                    const int32_t rel = *(const int32_t*)(img + i + 3);
+                    const uintptr_t tgt = at + i + 7 + (intptr_t)rel;
+                    if (tgt < rp->base || tgt + 8 > rp->base + rp->size)
+                        continue;
+                    const uintptr_t val = mem.read_ptr(tgt);
+                    if (!looks_heap(val))
+                        continue;
+                    uintptr_t used = 0;
+                    if (follow_fake(mem, val, used)) {
+                        dm_rva = tgt - rp->base;
+                        VT_LOG(L"DataModel code-ref hit at " + format_hex(dm_rva) +
+                               L" inner_off " + format_hex(used));
+                        return;
+                    }
+                }
+            });
+
+        // Phase 2: derive from TaskScheduler jobs (Xeno approach)
+        // Walk each job in the TS job list; some jobs hold a DataModel*.
+        if (!dm_rva && o.task_scheduler) {
+            VT_LOG(L"DataModel: trying TS job walk");
+            const uintptr_t ts = mem.read_ptr(rp->base + o.task_scheduler);
+            if (looks_heap(ts)) {
+                const int job_starts[] = {
+                    0xC8, 0xD0, 0xD8, 0xE0, 0xE8, 0xF0, 0xF8, 0x100,
+                    0x108, 0x110, 0x118, 0x120, 0x128, 0x130, 0x138, 0x140,
+                    0x148, 0x150, 0x158, 0x160, 0x168, 0x170, 0x178, 0x180,
+                    0x188, 0x190, 0x198, 0x1A0, 0x1A8, 0x1B0, 0x1B8, 0x1C0,
+                    0x1C8, 0x1D0, 0x1D8, 0x1E0, 0x1E8, 0x1F0, 0x1F8, 0x200,
+                    0x208,
+                };
+                for (int st : job_starts) {
+                    if (dm_rva) break;
+                    const uintptr_t jb = mem.read_ptr(ts + st);
+                    const uintptr_t je = mem.read_ptr(ts + st + 8);
+                    if (!looks_heap(jb) || !looks_heap(je) || je <= jb || (je - jb) > 0x8000)
+                        continue;
+                    for (uintptr_t it = jb; it < je; it += 8) {
+                        if (dm_rva) break;
+                        const uintptr_t job = mem.read_ptr(it);
+                        if (!looks_heap(job))
+                            continue;
+                        // Each job may hold a DataModel* at various offsets
+                        const int dm_offs[] = {
+                            0x108, 0x110, 0x118, 0x120, 0x128, 0x130,
+                            0x138, 0x140, 0x148, 0x150, 0x158, 0x160,
+                            0x168, 0x170, 0x178, 0x180, 0x188, 0x190,
+                            0x1A0, 0x1A8, 0x1B0, 0x1B8, 0x1C0,
+                        };
+                        for (int dmo : dm_offs) {
+                            const uintptr_t candidate = mem.read_ptr(job + dmo);
+                            if (!looks_heap(candidate))
+                                continue;
+                            if (is_datamodel(mem, candidate)) {
+                                // Found it directly — store the job's DM offset
+                                // We need a stable .data global for it though.
+                                // For now log that we found the live DM address.
+                                VT_LOG(L"DataModel found via job walk at job+" +
+                                       format_hex(dmo) + L" dm=" + format_hex(candidate));
+                                // Store it as a direct pointer in the config
+                                o.live_datamodel = candidate;
+                                break;
+                            }
+                            uintptr_t used = 0;
+                            if (follow_fake(mem, candidate, used)) {
+                                VT_LOG(L"DataModel fake via job walk at job+" +
+                                       format_hex(dmo) + L" inner=" + format_hex(used));
+                                o.live_datamodel = follow_fake(mem, candidate, used);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 3: brute-force .data scan
+        if (!dm_rva) {
+            VT_LOG(L"DataModel code-ref scan failed, trying .data brute-force");
+            const DWORD dm1 = GetTickCount();
+            each_region(proc, rp->base, rp->size, PAGE_READWRITE,
+                [&](uintptr_t at, const uint8_t* img, size_t n) {
+                    if (dm_rva || GetTickCount() - dm1 > 6000)
+                        return;
+                    for (size_t i = 0; i + 8 <= n; i += 8) {
+                        uintptr_t val;
+                        std::memcpy(&val, img + i, 8);
+                        if (!looks_heap(val))
+                            continue;
+                        uintptr_t used = 0;
+                        if (follow_fake(mem, val, used)) {
+                            dm_rva = (at + i) - rp->base;
+                            VT_LOG(L"DataModel .data hit at " + format_hex(dm_rva) +
+                                   L" inner_off " + format_hex(used));
+                            return;
+                        }
+                    }
+                });
+        }
+
+        if (dm_rva)
+            o.fake_datamodel = dm_rva;
     }
 
     const auto out = data_root() / L"config" / L"offsets.json";
@@ -457,10 +630,11 @@ bool OffsetSync::refresh() {
     VT_LOG(L"Offset sync " + utf8_to_wide(o.roblox_version) +
            L"  TS " + format_hex(o.task_scheduler) +
            L"  DM " + format_hex(o.fake_datamodel) +
+           L"  liveDM " + format_hex(o.live_datamodel) +
            L"  load " + format_hex(o.luau_load) +
            L"  pcall " + format_hex(o.lua_pcall) +
            L"  newthread " + format_hex(o.lua_newthread));
-    return o.luau_load || o.lua_pcall || o.task_scheduler || o.fake_datamodel;
+    return o.luau_load || o.lua_pcall || o.task_scheduler || o.fake_datamodel || o.live_datamodel;
 }
 
 } // namespace vt

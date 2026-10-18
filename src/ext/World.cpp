@@ -773,6 +773,11 @@ uintptr_t World::resolve_datamodel() {
         last_dm_check_ = GetTickCount();
         return dm;
     };
+    // Try live_datamodel (direct heap address from job walk) first
+    if (off().live_datamodel) {
+        if (auto dm = take(off().live_datamodel))
+            return dm;
+    }
     for (uintptr_t rva : prefer(off().fake_datamodel, kFakeDm, (int)std::size(kFakeDm))) {
         const uintptr_t fake = mem_.read_ptr(base_ + rva);
         if (!mem_.looks(fake))

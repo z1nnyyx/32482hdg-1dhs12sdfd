@@ -60,6 +60,7 @@ struct OffsetTable {
 
     // External world / overlay (RVAs + structure offsets). Tried first, then fallbacks.
     uintptr_t fake_datamodel = 0x8B79B58;
+    uintptr_t live_datamodel = 0;         // Direct heap address (from job walk)
     uintptr_t visual_engine  = 0x8136228;
     uintptr_t fake_dm_off    = 0x1D8;
     uintptr_t child_off      = 0x78;
