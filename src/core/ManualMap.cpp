@@ -1371,8 +1371,35 @@ ManualMapper::Result ManualMapper::map_buffer(HANDLE process, const uint8_t* pe,
     VT_LOG(L"ManualMap: imports resolved — applying section protections");
     protect_sections(process, remote_base, nt);
 
-    const uintptr_t entry = remote_base + nt->OptionalHeader.AddressOfEntryPoint;
+    const uintptr_t raw_entry = remote_base + nt->OptionalHeader.AddressOfEntryPoint;
     const uintptr_t stub_addr = remote_base + image_size;
+
+    // CFG-valid trampoline: allocate a MEM_PRIVATE page, write a simple
+    // DllMain(hModule, DLL_PROCESS_ATTACH, 0) forwarder, CFG-mark it.
+    // The stubs `call rax` this trampoline instead of raw_entry, so the
+    // target is in the CFG bitmap. The trampoline itself does
+    // `mov rax, raw_entry; jmp rax` — a register-direct jump, no CFG check.
+    uintptr_t entry = raw_entry;
+    {
+        void* tramp = VirtualAllocEx(process, nullptr, 0x1000,
+                                     MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (tramp) {
+            uint8_t tc[14]{};
+            tc[0] = 0x48; tc[1] = 0xB8;
+            std::memcpy(tc + 2, &raw_entry, 8);
+            tc[10] = 0xFF; tc[11] = 0xE0;
+            if (WriteProcessMemory(process, tramp, tc, sizeof(tc), nullptr)) {
+                DWORD tp = 0;
+                VirtualProtectEx(process, tramp, 0x1000, PAGE_EXECUTE_READ, &tp);
+                cfg_mark(process, tramp);
+                entry = (uintptr_t)tramp;
+                VT_LOG(L"ManualMap: CFG trampoline=0x" +
+                    [&]{ wchar_t b[20]; swprintf_s(b, L"%llX", (ULONGLONG)entry); return std::wstring(b); }());
+            } else {
+                VirtualFreeEx(process, tramp, 0, MEM_RELEASE);
+            }
+        }
+    }
 
     std::vector<uintptr_t> tls_cbs;
     const auto& tlsdir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
@@ -1490,6 +1517,7 @@ ManualMapper::Result ManualMapper::map_buffer(HANDLE process, const uint8_t* pe,
                     sc.FlushInstructionCache(process, svpage, 0x100);
                 else { resolve_ntdll(); if (s_NtFlush) s_NtFlush(process, svpage, 0x100); }
                 stub_valloc_b = (uintptr_t)svpage;
+                cfg_mark(process, svpage);
                 VT_LOG(L"ManualMap: stub_valloc=0x" + [&]{ wchar_t b[20]; swprintf_s(b, L"%llX", (ULONGLONG)stub_valloc_b); return std::wstring(b); }());
             } else {
                 VirtualFreeEx(process, svpage, 0, MEM_RELEASE);
@@ -1544,13 +1572,24 @@ ManualMapper::Result ManualMapper::map_buffer(HANDLE process, const uint8_t* pe,
 
     // 3. NtCreateThreadEx (last resort). ETHREAD start address masked to
     //    an ntdll gadget so the kernel sees a normal thread creation.
+    //    Use CFG-marked VirtualAlloc stub when available (MEM_PRIVATE can be
+    //    registered in the CFG bitmap; MEM_MAPPED ghost section cannot).
     if (!started) {
-        VT_WARN(L"IAT hook did not fire DllMain — trying NtCreateThreadEx");
-        started = start_via_new_thread(process, (PVOID)gadget, (PVOID)stub_addr_b);
+        const uintptr_t safe_stub = stub_valloc_b ? stub_valloc_b : stub_addr_b;
+        VT_WARN(L"IAT hook did not fire DllMain — trying NtCreateThreadEx (stub=0x" +
+                [&]{ wchar_t b[20]; swprintf_s(b, L"%llX", (ULONGLONG)safe_stub); return std::wstring(b); }() + L")");
+        started = start_via_new_thread(process, (PVOID)gadget, (PVOID)safe_stub);
+    }
+
+    // 4. APC injection — queue to every Roblox thread.
+    if (!started) {
+        const uintptr_t safe_stub = stub_valloc_b ? stub_valloc_b : stub_addr_b;
+        VT_WARN(L"NtCreateThreadEx did not fire DllMain — trying APC injection");
+        started = start_via_apc(process, (PVOID)safe_stub, pid);
     }
 
     if (!started) {
-        r.error = L"DllMain did not run — all three trigger paths failed";
+        r.error = L"DllMain did not run — all four trigger paths failed";
         return r;
     }
     // Do not IAT-hook KERNEL32 NtWaitForSingleObject. That import is process-wide;

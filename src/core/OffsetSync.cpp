@@ -328,17 +328,27 @@ bool OffsetSync::refresh() {
         "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? 8B F2",
         "40 53 56 57 48 83 EC ?? 8B F2 49 8B D8",
         "48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? 8B F2 49 8B F8",
+        "48 89 5C 24 ?? 48 89 6C 24 ?? 56 57 41 56 48 83 EC ?? 8B F2",
+        "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 48 89 7C 24 ?? 41 56 48 83 EC ?? 8B F2",
+        "48 89 5C 24 ?? 55 56 57 41 54 41 55 48 83 EC ?? 8B F2",
     }, L"lua_pcall");
     take_lua(o.luau_load, proc, rp->base, rp->size, {
         "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 83 EC ?? 41 8B E9",
         "48 89 5C 24 ?? 55 56 57 41 54 41 55 41 56 41 57 48 83 EC ?? 4D 8B E1",
         "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 54 41 55 41 56 41 57 48 83 EC ?? 4D 8B E1",
+        "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 41 56 41 57 48 83 EC ?? 41 8B E9",
+        "48 89 5C 24 ?? 48 89 6C 24 ?? 56 57 41 54 41 55 41 56 41 57 48 83 EC ?? 4D 8B E1",
+        "48 89 5C 24 ?? 48 89 74 24 ?? 48 89 7C 24 ?? 41 56 41 57 48 83 EC ?? 41 8B E9",
     }, L"luau_load");
     take_lua(o.lua_pushnil, proc, rp->base, rp->size, {
         "48 8B 41 ?? 48 C7 00 00 00 00 00 48 83 41 ?? 10",
+        "48 8B 41 ?? C7 00 00 00 00 00 C7 40 ?? 00 00 00 00 48 83 41 ?? 10",
+        "48 8B 81 ?? ?? ?? ?? 48 C7 00 00 00 00 00 48 83 81 ?? ?? ?? ?? 10",
     }, L"lua_pushnil");
     take_lua(o.lua_pushnumber, proc, rp->base, rp->size, {
         "48 8B 41 ?? F2 0F 11 00 C7 40 0C 03 00 00 00 48 83 41 ?? 10",
+        "48 8B 41 ?? F2 0F 11 00 C7 40 ?? 03 00 00 00 48 83 41 ?? 10",
+        "48 8B 81 ?? ?? ?? ?? F2 0F 11 00 C7 40 ?? 03 00 00 00",
     }, L"lua_pushnumber");
     take_lua(o.lua_settop, proc, rp->base, rp->size, {
         "85 D2 7E ?? 48 8B 41 ?? 48 63 D2 48 8D 14 D0 48 3B 51",
@@ -346,6 +356,8 @@ bool OffsetSync::refresh() {
     }, L"lua_settop");
     take_lua(o.lua_type, proc, rp->base, rp->size, {
         "85 D2 7E ?? 48 8B 41 ?? 48 63 D2 48 8D 44 D0 F0 8B 40 0C",
+        "85 D2 7E ?? 48 8B 41 ?? 48 63 D2 48 C1 E2 04 48 03 D0 8B 42",
+        "85 D2 78 ?? 48 8B 41 ?? 48 63 D2 48 8D 44 D0 ?? 8B 40",
     }, L"lua_type");
     take_lua(o.lua_pushstring, proc, rp->base, rp->size, {
         "48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? 48 8B FA 48 8B F1 48 85 D2",
@@ -369,9 +381,13 @@ bool OffsetSync::refresh() {
     }, L"lua_newthread");
     take_lua(o.lua_pushcclosure, proc, rp->base, rp->size, {
         "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 83 EC ?? 4D 8B F9 49 8B F0",
+        "48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 41 56 41 57 48 83 EC ?? 4D 8B F9 49 8B F0",
+        "48 89 5C 24 ?? 48 89 6C 24 ?? 56 57 41 56 41 57 48 83 EC ?? 4D 8B F9",
     }, L"lua_pushcclosure");
     take_lua(o.lua_tolstring, proc, rp->base, rp->size, {
         "48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? 49 8B F8 8B DA 48 8B F1",
+        "48 89 5C 24 ?? 48 89 74 24 ?? 48 89 7C 24 ?? 48 83 EC ?? 49 8B F8 8B DA",
+        "48 89 5C 24 ?? 57 48 83 EC ?? 49 8B F8 8B DA 48 8B D9",
     }, L"lua_tolstring");
     take_lua(o.lua_setreadonly, proc, rp->base, rp->size, {
         "40 53 48 83 EC ?? 8B DA E8 ?? ?? ?? ?? 48 8B 08 84 D2 74 ?? 80 48",

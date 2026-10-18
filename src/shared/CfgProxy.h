@@ -13,7 +13,7 @@ struct CfgGadget {
     int       disp = 0;
     bool      via_rax = true;
     bool      reload_rcx = false; // mov rax,[rcx] then jmp [rax+disp]
-    bool ok() const { return va && disp > 0; }
+    bool ok() const { return va && disp >= 0; }
 };
 
 CfgGadget scan_cfg_gadget();
