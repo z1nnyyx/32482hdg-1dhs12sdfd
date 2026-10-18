@@ -1901,6 +1901,29 @@ void attach_after_sync() {
         PostMessageW(g_wnd, WM_ATTACH_CONT, 0, 0);
 }
 
+// Launches the UWP (Store) Roblox via the AppsFolder shell namespace.
+// Returns true if the launch command was accepted (process starts
+// asynchronously; the race-attach watcher picks it up when it appears).
+// This is the exact same mechanism Xeno uses for its one-click flow.
+static bool launch_store_roblox() {
+    // Query the actual installed Roblox AppUserModelID (the publisher-id
+    // trailer rotates), falling back to the common one. The Store build's
+    // AppsFolder entry is always "<PackageFamilyName>!App".
+    const wchar_t* candidates[] = {
+        L"shell:AppsFolder\\ROBLOXCORPORATION.ROBLOX_55nm5eh3cm0pr!App",
+        L"shell:AppsFolder\\ROBLOXCORPORATION.ROBLOX!App",
+    };
+    for (const auto* cmd : candidates) {
+        const auto r = (INT_PTR)ShellExecuteW(nullptr, L"open", cmd, nullptr,
+                                              nullptr, SW_SHOWNORMAL);
+        if (r > 32) {
+            VT_LOG(std::wstring(L"Launched Store Roblox via ") + cmd);
+            return true;
+        }
+    }
+    return false;
+}
+
 void do_attach() {
     if (!g_init_done) {
         notify(L"VoidTrace", L"Still initialising — wait a moment and try again");
@@ -1912,6 +1935,28 @@ void do_attach() {
     }
     const auto& pname = Config::instance().get().process_name;
     if (!ProcessFinder::find(pname)) {
+        // No Roblox running. Xeno-style flow: if UWP mode is on (default),
+        // launch the Store build ourselves and let the race-attach watcher
+        // catch it the moment it starts. If Store Roblox isn't installed,
+        // ShellExecute returns ≤32 → point user at the Store install.
+        const auto& cfg = Config::instance().get();
+        if (cfg.uwp_mode && !cfg.studio_mode) {
+            g_attach_busy = false;   // watcher will set this again when it fires
+            set_progress(5, L"launching Store Roblox…");
+            if (launch_store_roblox()) {
+                toast(L"Launching Store Roblox — VoidTrace will attach when it opens");
+                return;
+            }
+            // Store Roblox not installed. Open the Store page.
+            notify(L"Install Store Roblox",
+                   L"Store Roblox isn't installed. Opening Microsoft Store — "
+                   L"click Get, then press Attach again.", 8000);
+            ShellExecuteW(nullptr, L"open",
+                          L"ms-windows-store://pdp/?productid=9NBLGGH537C9",
+                          nullptr, nullptr, SW_SHOWNORMAL);
+            set_progress(0, L"Idle");
+            return;
+        }
         g_attach_busy = false;
         set_progress(0, L"Idle");
         notify(L"VoidTrace", L"Roblox not found — open Roblox and join a game first");
