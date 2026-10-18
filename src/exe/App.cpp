@@ -130,7 +130,7 @@ enum HitId : int {
     H_NONE = 0, H_MIN, H_MAX, H_CLOSE,
     H_GEAR, H_OPEN, H_SAVE, H_CLEAR,
     H_ATTACH, H_INJECT, H_ESP, H_SCRIPTS, H_TOPMOST, H_EXECUTE, H_NEWTAB,
-    H_SETLOG, H_SETHELP, H_SETINJ, H_SETESP, H_SETMAP, H_SETBACK, H_SETAUTO, H_SETSTARS, H_SETUWP, H_SETSTUDIO,
+    H_SETLOG, H_SETHELP, H_SETINJ, H_SETESP, H_SETMAP, H_SETBACK, H_SETAUTO, H_SETSTARS, H_SETUWP, H_SETSTUDIO, H_SETSTOREBTN,
     H_TAB0 = 200, H_TABX0 = 400, H_FILE0 = 600,
 };
 
@@ -1777,6 +1777,31 @@ void attach_after_sync() {
     g_rpm.attach(g_rbx->pid, g_rbx->base, g_rbx->size);
     VT_LOG(L"Found Roblox  pid " + std::to_wstring(g_rbx->pid) +
            (g_rbx->path.empty() ? L"" : (L"  " + g_rbx->path)));
+
+    // Diagnose up-front which build we actually got, so the user knows
+    // whether injection is realistically going to work before we spend 30s
+    // getting silently killed by Hyperion.
+    {
+        std::wstring lp = g_rbx->path;
+        std::transform(lp.begin(), lp.end(), lp.begin(),
+                       [](wchar_t c) { return (wchar_t)std::towlower(c); });
+        const bool is_uwp    = lp.find(L"\\packages\\roblox") != std::wstring::npos ||
+                               lp.find(L"windowsapps") != std::wstring::npos;
+        const bool is_studio = lp.find(L"robloxstudio") != std::wstring::npos;
+        const bool is_legacy_player = !is_uwp && !is_studio;
+        if (is_legacy_player) {
+            VT_WARN(L"Target is LEGACY Roblox Player — Hyperion is active on this build.");
+            VT_WARN(L"User-mode injection will fail. Install Store Roblox or enable Studio Mode.");
+            notify(L"Hyperion detected",
+                   L"This is the website Roblox — Hyperion will block injection. "
+                   L"Open Settings and either install Store Roblox or switch to Studio Mode.",
+                   8000);
+        } else if (is_uwp) {
+            VT_LOG(L"Target is UWP (Store) Roblox — no Hyperion kernel driver. Injection should succeed.");
+        } else if (is_studio) {
+            VT_LOG(L"Target is Roblox Studio — no Hyperion. Injection should succeed.");
+        }
+    }
     g_attach_step = 4;
     // If the user has opted in (config.auto_inject = true, default), try to
     // put the DLL into RobloxPlayerBeta so scripts can actually reach the
@@ -2478,6 +2503,21 @@ void paint(HWND wnd) {
         toggle_row(428, H_SETSTARS, L"Star Field",
                    L"Animated starfield — stars drift and repel from cursor",
                    g_stars_enabled);
+
+        // "Install Store Roblox" primary action button.
+        {
+            const int rw = W - 48;
+            RECT br = RR(24, yEd + 490, rw, 44);
+            add_hit(br, H_SETSTOREBTN);
+            fill_round(dc, br, g_hover == H_SETSTOREBTN ? kBlue : kExecBtn, 8);
+            text_at(dc, RR(36, yEd + 490 + 6, rw - 24, 18),
+                    L"Install Store Roblox  ·  one-click", kText, g_fontBd,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            text_at(dc, RR(36, yEd + 490 + 24, rw - 24, 16),
+                    L"Opens Microsoft Store — the Store build has no Hyperion",
+                    RGB(220, 230, 255), g_fontSm,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
     } else if (g_scripts_open) {
         text_at(dc, RR(24, yEd + 16, 300, 24), L"Scripts", kText, g_fontTitle,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -2630,6 +2670,17 @@ void click(int id) {
         VT_LOG(cfg.studio_mode ? L"Studio mode enabled (RobloxStudioBeta.exe)"
                                : L"Studio mode disabled (Player)");
         invalidate();
+        return;
+    }
+    if (id == H_SETSTOREBTN) {
+        // Opens the Microsoft Store page for Roblox. Installing the Store
+        // build gives you the UWP Roblox, which has no Hyperion kernel
+        // driver — VoidTrace's existing injection just works against it.
+        ShellExecuteW(nullptr, L"open",
+                      L"ms-windows-store://pdp/?productid=9NBLGGH537C9",
+                      nullptr, nullptr, SW_SHOWNORMAL);
+        toast(L"Opening Microsoft Store — install Roblox from there");
+        VT_LOG(L"Opened Store page for Roblox UWP install");
         return;
     }
     if (id == H_SETLOG) {
