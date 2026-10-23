@@ -74,10 +74,36 @@ struct OffsetTable {
     uintptr_t humanoid_maxhp = 0x1A8;
     uintptr_t root_part      = 0x258;
 
-    // IDA-style patterns used when RVAs are 0
+    // IDA-style patterns used when RVAs are 0. Any pat_<name> that is set wins
+    // over the built-in heuristics in AutoResolve — paste one from IDA after a
+    // Roblox update to force-resolve a stubborn API without a rebuild.
     std::string pat_task_scheduler;
     std::string pat_luau_load;
     std::string pat_lua_pcall;
+    std::string pat_lua_gettop;
+    std::string pat_lua_settop;
+    std::string pat_lua_type;
+    std::string pat_lua_pushnil;
+    std::string pat_lua_pushnumber;
+    std::string pat_lua_pushboolean;
+    std::string pat_lua_pushvalue;
+    std::string pat_lua_pushstring;
+    std::string pat_lua_pushlstring;
+    std::string pat_lua_pushcclosure;
+    std::string pat_lua_createtable;
+    std::string pat_lua_getfield;
+    std::string pat_lua_setfield;
+    std::string pat_lua_gettable;
+    std::string pat_lua_settable;
+    std::string pat_lua_newuserdata;
+    std::string pat_lua_setmetatable;
+    std::string pat_lua_getmetatable;
+    std::string pat_lua_tolstring;
+    std::string pat_lua_toboolean;
+    std::string pat_lua_tonumber;
+    std::string pat_lua_touserdata;
+    std::string pat_lua_newthread;
+    std::string pat_lua_setreadonly;
 };
 
 struct AppConfig {

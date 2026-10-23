@@ -3,7 +3,7 @@
   "auto_attach": true,
   "auto_inject": true,
 
-  "comment": "Live client on this machine (2026-08). Function RVAs still auto-scanned in-process. Structure offsets from the matching public dumper.",
+  "comment": "Live client on this machine (2026-08). Structure offsets from the matching public dumper. All lua_* RVAs are 0 — AutoResolve scans the loaded image at runtime. If a Roblox patch breaks a specific API, paste its IDA pattern into the matching pat_<name> below and ship — no rebuild needed.",
 
   "task_scheduler": "0x88B64C8",
   "job_name": "0x18",
@@ -56,5 +56,29 @@
 
   "pat_task_scheduler": "",
   "pat_luau_load": "",
-  "pat_lua_pcall": ""
+  "pat_lua_pcall": "",
+  "pat_lua_gettop": "",
+  "pat_lua_settop": "",
+  "pat_lua_type": "",
+  "pat_lua_pushnil": "",
+  "pat_lua_pushnumber": "",
+  "pat_lua_pushboolean": "",
+  "pat_lua_pushvalue": "",
+  "pat_lua_pushstring": "",
+  "pat_lua_pushlstring": "",
+  "pat_lua_pushcclosure": "",
+  "pat_lua_createtable": "",
+  "pat_lua_getfield": "",
+  "pat_lua_setfield": "",
+  "pat_lua_gettable": "",
+  "pat_lua_settable": "",
+  "pat_lua_newuserdata": "",
+  "pat_lua_setmetatable": "",
+  "pat_lua_getmetatable": "",
+  "pat_lua_tolstring": "",
+  "pat_lua_toboolean": "",
+  "pat_lua_tonumber": "",
+  "pat_lua_touserdata": "",
+  "pat_lua_newthread": "",
+  "pat_lua_setreadonly": ""
 }
