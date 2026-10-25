@@ -1,27 +1,27 @@
 --!native
 --!optimize 2
-local XENO_UNIQUE = "%XENO_UNIQUE_ID%"
+local VT_UNIQUE = "%XENO_UNIQUE_ID%"
 
 local HttpService, UserInputService, InsertService = game:FindService("HttpService"), game:FindService("UserInputService"), game:FindService("InsertService")
 local RunService, CoreGui, StarterGui = game:GetService("RunService"), game:FindService("CoreGui"), game:GetService("StarterGui")
 local VirtualInputManager, RobloxReplicatedStorage = Instance.new("VirtualInputManager"), game:GetService("RobloxReplicatedStorage")
 
-if RobloxReplicatedStorage:FindFirstChild("Xeno") then return end
+if RobloxReplicatedStorage:FindFirstChild("VoidTrace") then return end
 
-local XenoContainer = Instance.new("Folder", RobloxReplicatedStorage)
-XenoContainer.Name = "Xeno"
-local objectPointerContainer, scriptsContainer = Instance.new("Folder", XenoContainer), Instance.new("Folder", XenoContainer)
+local VtContainer = Instance.new("Folder", RobloxReplicatedStorage)
+VtContainer.Name = "VoidTrace"
+local objectPointerContainer, scriptsContainer = Instance.new("Folder", VtContainer), Instance.new("Folder", VtContainer)
 objectPointerContainer.Name = "Instance Pointers"
 scriptsContainer.Name = "Scripts"
 
-local Xeno = {
+local VoidTrace = {
 	about = {
-		_name = 'Xeno',
+		_name = 'VoidTrace',
 		_version = '%XENO_VERSION%',
 		_publisher = ".rizve | https://rizve.us.to"
 	}
 }
-table.freeze(Xeno.about)
+table.freeze(VoidTrace.about)
 
 local coreModules, blacklistedModuleParents = {}, {
 	"Common",
@@ -57,21 +57,21 @@ end
 local libs = {
 	{
 		['name'] = "HashLib",
-		['url'] = "https://rizve.us.to/Xeno/hash"
+		['url'] = "https://voidtrace.local/hash"
 	},
 	{
 		['name'] = "lz4",
-		['url'] = "https://rizve.us.to/Xeno/lz4"
+		['url'] = "https://voidtrace.local/lz4"
 	},
 	{
 		['name'] = "DrawingLib",
-		['url'] = "https://rizve.us.to/Xeno/drawing"
+		['url'] = "https://voidtrace.local/drawing"
 	}
 }
 
 if script.Name == "VRNavigation" then
 	StarterGui:SetCore("SendNotification", {
-		Title = "[Xeno]",
+		Title = "[VoidTrace]",
 		Text = "Used ingame method. When you leave the game it might crash!"
 	})
 end
@@ -270,7 +270,7 @@ function Bridge:InternalRequest(body, timeout)
 	end)
 
 	if success and result then
-		error("XENO SERVER ERROR: " .. tostring(result), 2)
+		error("VOIDTRACE ERROR: " .. tostring(result), 2)
 	end
 
 	error("An unknown error occured by the server.", 2)
@@ -369,7 +369,7 @@ function Bridge:SyncFiles()
 		getAllFiles("./")
 	end) if not success then
 		StarterGui:SetCore("SendNotification", {
-			Title = "[Xeno]",
+			Title = "[VoidTrace]",
 			Text = "Could not sync virtual files from client to external. Server was closed or it is being overloaded"
 		})
 		return
@@ -436,7 +436,7 @@ function Bridge:loadstring(source, chunkName)
 	local coreModule = _game.Clone(coreModules[math.random(1, #coreModules)])
 	coreModule:ClearAllChildren()
 	coreModule.Name = HttpService:GenerateGUID(false) .. ":" .. chunkName
-	coreModule.Parent = XenoContainer
+	coreModule.Parent = VtContainer
 	table.insert(cachedModules, coreModule)
 
 	local result = self:InternalRequest({
@@ -475,7 +475,7 @@ function Bridge:loadstring(source, chunkName)
 			coreModule = _game.Clone(coreModules[math.random(1, #coreModules)])
 			coreModule:ClearAllChildren()
 			coreModule.Name = HttpService:GenerateGUID(false) .. ":" .. chunkName
-			coreModule.Parent = XenoContainer
+			coreModule.Parent = VtContainer
 
 			self:InternalRequest({
 				['Url'] = self.serverUrl .. "/loadstring?n=" .. coreModule.Name .. "&cn=" .. chunkName .. "&pid=" .. tostring(ProcessID),
@@ -527,7 +527,7 @@ function Bridge:request(options, x)
 	end
 	return {
 		Success = false,
-		StatusMessage = "Can't connect to Xeno web server: " .. self.serverUrl,
+		StatusMessage = "Can't connect to VoidTrace web server: " .. self.serverUrl,
 		StatusCode = 599;
 		HttpError = Enum.HttpError.ConnectFail
 	}
@@ -648,18 +648,18 @@ end
 
 -- / IMPORTANT FUNCS \ --
 local httpSpy = false
-Xeno.Xeno = {
+VoidTrace.VoidTrace = {
 	PID = ProcessID,
 	GUID = XENO_UNIQUE,
 	HttpSpy = function(state)
 		if state == nil then state = true end
 		assert(type(state) == "boolean", "invalid argument #1 to 'HttpSpy' (boolean expected, got " .. type(state) .. ") ", 2)
-		Xeno.rconsoleinfo("Http Spy is set to '" .. tostring(state) .. "'")
+		VoidTrace.rconsoleinfo("Http Spy is set to '" .. tostring(state) .. "'")
 		httpSpy = state
 	end,
 }
 
-function Xeno.Xeno.get_real_address(instance)
+function VoidTrace.VoidTrace.get_real_address(instance)
 	assert(typeof(instance) == "Instance", "invalid argument #1 to 'get_real_address' (Instance expected, got " .. typeof(instance) .. ") ", 2)
 	local objectValue = Instance.new("ObjectValue", objectPointerContainer)
 	objectValue.Name = HttpService:GenerateGUID(false)
@@ -676,7 +676,7 @@ function Xeno.Xeno.get_real_address(instance)
 	return 0
 end
 
-function Xeno.Xeno.spoof_instance(instance, newinstance)
+function VoidTrace.VoidTrace.spoof_instance(instance, newinstance)
 	assert(typeof(instance) == "Instance", "invalid argument #1 to 'spoof_instance' (Instance expected, got " .. typeof(instance) .. ") ", 2)
 	assert(typeof(newinstance) == "Instance" or type(newinstance) == "number", "invalid argument #2 to 'spoof_instance' (Instance or number expected, got " .. typeof(newinstance) .. ") ", 2)
 	local newAddress
@@ -684,7 +684,7 @@ function Xeno.Xeno.spoof_instance(instance, newinstance)
 		if type(newinstance) == "number" then 
 			newAddress = newinstance
 		else
-			newAddress = Xeno.Xeno.get_real_address(newinstance)
+			newAddress = VoidTrace.VoidTrace.get_real_address(newinstance)
 		end
 	end
 	local objectValue = Instance.new("ObjectValue", objectPointerContainer)
@@ -701,7 +701,7 @@ function Xeno.Xeno.spoof_instance(instance, newinstance)
 end
 
 -- globals, shared across all clients (made for testing only so its badly coded)
-function Xeno.Xeno.GetGlobal(global_name)
+function VoidTrace.VoidTrace.GetGlobal(global_name)
 	assert(type(global_name) == "string", "invalid argument #1 to 'GetGlobal' (string expected, got " .. type(global_name) .. ") ", 2)
 	local result = Bridge:InternalRequest({
 		['c'] = "gb",
@@ -723,7 +723,7 @@ function Xeno.Xeno.GetGlobal(global_name)
 		return HttpService:JSONDecode(result.d)
 	end
 end
-function Xeno.Xeno.SetGlobal(global_name, value)
+function VoidTrace.VoidTrace.SetGlobal(global_name, value)
 	assert(type(global_name) == "string", "invalid argument #1 to 'SetGlobal' (string expected, got " .. type(global_name) .. ") ", 2)
 	local valueT = type(value)
 	assert(valueT == "string" or valueT == "number" or valueT == "table", "invalid argument #2 to 'SetGlobal' (string, number, or table expected, got " .. valueT .. ") ", 2)
@@ -739,7 +739,7 @@ function Xeno.Xeno.SetGlobal(global_name, value)
 	}) ~= nil
 end
 
-function Xeno.Xeno.Compile(source)
+function VoidTrace.VoidTrace.Compile(source)
 	assert(type(source) == "string", "invalid argument #1 to 'Compile' (string expected, got " .. type(source) .. ") ", 2)
 	if source == "" then return "" end
 	local _, result = Bridge:CanCompile(source, true)
@@ -747,7 +747,7 @@ function Xeno.Xeno.Compile(source)
 end
 
 local unlockedModules = {}
-function Xeno.require(moduleScript)
+function VoidTrace.require(moduleScript)
 	assert(typeof(moduleScript) == "Instance", "Attempted to call require with invalid argument(s). ", 2)
 	assert(moduleScript.ClassName == "ModuleScript", "Attempted to call require with invalid argument(s). ", 2)
 
@@ -802,7 +802,7 @@ function Xeno.require(moduleScript)
 	return _require(moduleScript)
 end
 
-function Xeno.loadstring(source, chunkName)
+function VoidTrace.loadstring(source, chunkName)
 	assert(type(source) == "string", "invalid argument #1 to 'loadstring' (string expected, got " .. type(source) .. ") ", 2)
 	chunkName = chunkName or "loadstring"
 	assert(type(chunkName) == "string", "invalid argument #2 to 'loadstring' (string expected, got " .. type(chunkName) .. ") ", 2)
@@ -821,7 +821,7 @@ end
 
 local supportedMethods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
 
-function Xeno.request(options)
+function VoidTrace.request(options)
 	assert(type(options) == "table", "invalid argument #1 to 'request' (table expected, got " .. type(options) .. ") ", 2)
 	assert(type(options.Url) == "string", "invalid option 'Url' for argument #1 to 'request' (string expected, got " .. type(options.Url) .. ") ", 2)
 	options.Method = options.Method or "GET"
@@ -836,16 +836,16 @@ function Xeno.request(options)
 	options.Body = options.Body or "e30=" -- "{}" in base64
 	options.Headers = options.Headers or {}
 	if httpSpy then
-		Xeno.rconsoleprint("-----------------[Xeno Http Spy]---------------\nUrl: " .. options.Url .. 
+		VoidTrace.rconsoleprint("-----------------[VoidTrace Http Spy]---------------\nUrl: " .. options.Url .. 
 			"\nMethod: " .. options.Method .. 
 			"\nBody: " .. options.Body .. 
 			"\nHeaders: " .. tostring(HttpService:JSONEncode(options.Headers))
 		)
 	end
 	if (options.Headers["User-Agent"]) then assert(type(options.Headers["User-Agent"]) == "string", "invalid option 'User-Agent' for argument #1 to 'request.Header' (string expected, got " .. type(options.Url) .. ") ", 2) end
-	options.Headers["User-Agent"] = options.Headers["User-Agent"] or "Xeno/RobloxApp/" .. tostring(Xeno.about._version)
+	options.Headers["User-Agent"] = options.Headers["User-Agent"] or "VoidTrace/RobloxApp/" .. tostring(VoidTrace.about._version)
 	options.Headers["Exploit-Guid"] = tostring(hwid)
-	options.Headers["Xeno-Fingerprint"] = tostring(hwid)
+	options.Headers["VoidTrace-Fingerprint"] = tostring(hwid)
 	options.Headers["Roblox-Place-Id"] = tostring(game.PlaceId)
 	options.Headers["Roblox-Game-Id"] = tostring(game.JobId)
 	options.Headers["Roblox-Session-Id"] = HttpService:JSONEncode({
@@ -854,7 +854,7 @@ function Xeno.request(options)
 	})
 	local response = Bridge:request(options)
 	if httpSpy then
-		Xeno.rconsoleprint("-----------------[Response]---------------\nStatusCode: " .. tostring(response.StatusCode) ..
+		VoidTrace.rconsoleprint("-----------------[Response]---------------\nStatusCode: " .. tostring(response.StatusCode) ..
 			"\nStatusMessage: " .. tostring(response.StatusMessage) ..
 			"\nSuccess: " .. tostring(response.Success) ..
 			"\nBody: " .. tostring(response.Body) ..
@@ -864,15 +864,15 @@ function Xeno.request(options)
 	end
 	return response
 end
-Xeno.http = {request = Xeno.request}
-Xeno.http_request = Xeno.request
+VoidTrace.http = {request = VoidTrace.request}
+VoidTrace.http_request = VoidTrace.request
 
-local user_agent = "Xeno"
-function Xeno.HttpGet(url, returnRaw)
+local user_agent = "VoidTrace"
+function VoidTrace.HttpGet(url, returnRaw)
 	assert(type(url) == "string", "invalid argument #1 to 'HttpGet' (string expected, got " .. type(url) .. ") ", 2)
 	local returnRaw = returnRaw or true
 
-	local result = Xeno.request({
+	local result = VoidTrace.request({
 		Url = url,
 		Method = "GET",
 		Headers = {
@@ -886,10 +886,10 @@ function Xeno.HttpGet(url, returnRaw)
 
 	return HttpService:JSONDecode(result.Body)
 end
-function Xeno.HttpPost(url, body, contentType)
+function VoidTrace.HttpPost(url, body, contentType)
 	assert(type(url) == "string", "invalid argument #1 to 'HttpPost' (string expected, got " .. type(url) .. ") ", 2)
 	contentType = contentType or "application/json"
-	return Xeno.request({
+	return VoidTrace.request({
 		Url = url,
 		Method = "POST",
 		body = body,
@@ -898,7 +898,7 @@ function Xeno.HttpPost(url, body, contentType)
 		}
 	})
 end
-function Xeno.GetObjects(asset)
+function VoidTrace.GetObjects(asset)
 	return {
 		InsertService:LoadLocalAsset(asset)
 	}
@@ -997,7 +997,7 @@ local function setupBlockedServiceFuncs(serviceTable)
 		end
 
 		if index == "Parent" then
-			return Xeno.game
+			return VoidTrace.game
 		end
 
 		if type(serviceTable[2][index]) == "function" then
@@ -1025,21 +1025,21 @@ for i, serviceTable in proxiedServices do
 end
 
 
-Xeno.game = newproxy(true)
-local gameProxy = getmetatable(Xeno.game)
+VoidTrace.game = newproxy(true)
+local gameProxy = getmetatable(VoidTrace.game)
 
 gameProxy.__index = function(self, index)
 	if index == "HttpGet" or index == "HttpGetAsync" then
 		return function(self, ...)
-			return Xeno.HttpGet(...)
+			return VoidTrace.HttpGet(...)
 		end
 	elseif index == "HttpPost" or index == "HttpPostAsync" then
 		return function(self, ...)
-			return Xeno.HttpPost(...)
+			return VoidTrace.HttpPost(...)
 		end
 	elseif index == "GetObjects" then
 		return function(self, ...)
-			return Xeno.GetObjects(...)
+			return VoidTrace.GetObjects(...)
 		end
 	end
 
@@ -1078,15 +1078,15 @@ end
 
 gameProxy.__metatable = getmetatable(_game)
 
-Xeno.Game = Xeno.game
+VoidTrace.Game = VoidTrace.game
 
 --[[
-Xeno.workspace = newproxy(true)
-local workspaceProxy = getmetatable(Xeno.workspace)
+VoidTrace.workspace = newproxy(true)
+local workspaceProxy = getmetatable(VoidTrace.workspace)
 workspaceProxy.__index = function(self, index)
 	index = string.gsub(tostring(index), '\0', '')
 	if index == "Parent" then
-		return Xeno.game
+		return VoidTrace.game
 	end
 
 	if type(_workspace[index]) == "function" then
@@ -1108,11 +1108,11 @@ end
 
 workspaceProxy.__metatable = getmetatable(_workspace)
 
-Xeno.Workspace = Xeno.workspace
+VoidTrace.Workspace = VoidTrace.workspace
 ]]
 
-function Xeno.getgenv()
-	return Xeno
+function VoidTrace.getgenv()
+	return VoidTrace
 end
 
 -- / Filesystem \ --
@@ -1138,7 +1138,7 @@ local function getSaved(path)
 	end
 end
 
-function Xeno.readfile(path)
+function VoidTrace.readfile(path)
 	assert(type(path) == "string", "invalid argument #1 to 'readfile' (string expected, got " .. type(path) .. ") ", 2)
 	local unsavedFile = getUnsaved(Bridge.writefile, path)
 	if unsavedFile then
@@ -1146,7 +1146,7 @@ function Xeno.readfile(path)
 	end
 	return Bridge:readfile(path)
 end
-function Xeno.writefile(path, content)
+function VoidTrace.writefile(path, content)
 	assert(type(path) == "string", "invalid argument #1 to 'writefile' (string expected, got " .. type(path) .. ") ", 2)
 	assert(type(content) == "string", "invalid argument #2 to 'writefile' (string expected, got " .. type(content) .. ") ", 2)
 	local unsavedFile, index = getUnsaved(Bridge.delfile, path)
@@ -1164,7 +1164,7 @@ function Xeno.writefile(path, content)
 		y = content
 	})
 end
-function Xeno.appendfile(path, content)
+function VoidTrace.appendfile(path, content)
 	assert(type(path) == "string", "invalid argument #1 to 'appendfile' (string expected, got " .. type(path) .. ") ", 2)
 	assert(type(content) == "string", "invalid argument #2 to 'appendfile' (string expected, got " .. type(content) .. ") ", 2)
 	local unsavedFile = getUnsaved(Bridge.writefile, path)
@@ -1176,14 +1176,14 @@ function Xeno.appendfile(path, content)
 	pcall(function()
 		readVal = Bridge:readfile(path)
 	end)
-	Xeno.writefile(path, readVal .. content)
+	VoidTrace.writefile(path, readVal .. content)
 end
-function Xeno.loadfile(path)
+function VoidTrace.loadfile(path)
 	assert(type(path) == "string", "invalid argument #1 to 'loadfile' (string expected, got " .. type(path) .. ") ", 2)
-	return Xeno.loadstring(Xeno.readfile(path))
+	return VoidTrace.loadstring(VoidTrace.readfile(path))
 end
-Xeno.dofile = Xeno.loadfile
-function Xeno.isfolder(path)
+VoidTrace.dofile = VoidTrace.loadfile
+function VoidTrace.isfolder(path)
 	assert(type(path) == "string", "invalid argument #1 to 'isfolder' (string expected, got " .. type(path) .. ") ", 2)
 	if getUnsaved(Bridge.delfolder, path) then
 		return false
@@ -1197,7 +1197,7 @@ function Xeno.isfolder(path)
 	end
 	return Bridge:isfolder(path)
 end
-function Xeno.isfile(path) -- return not Xeno.isfolder(path)
+function VoidTrace.isfile(path) -- return not VoidTrace.isfolder(path)
 	assert(type(path) == "string", "invalid argument #1 to 'isfile' (string expected, got " .. type(path) .. ") ", 2)
 	if getUnsaved(Bridge.delfile, path) then
 		return false
@@ -1211,7 +1211,7 @@ function Xeno.isfile(path) -- return not Xeno.isfolder(path)
 	end
 	return Bridge:isfile(path)
 end
-function Xeno.listfiles(path)
+function VoidTrace.listfiles(path)
 	assert(type(path) == "string", "invalid argument #1 to 'listfiles' (string expected, got " .. type(path) .. ") ", 2)
 
 	path = normalize_path(path)
@@ -1241,7 +1241,7 @@ function Xeno.listfiles(path)
 
 	return pathFiles
 end
-function Xeno.makefolder(path)
+function VoidTrace.makefolder(path)
 	assert(type(path) == "string", "invalid argument #1 to 'makefolder' (string expected, got " .. type(path) .. ") ", 2)
 	local unsavedFile, index = getUnsaved(Bridge.delfolder, path)
 	if unsavedFile then
@@ -1255,7 +1255,7 @@ function Xeno.makefolder(path)
 		x = path
 	})
 end
-function Xeno.delfolder(path)
+function VoidTrace.delfolder(path)
 	assert(type(path) == "string", "invalid argument #1 to 'delfolder' (string expected, got " .. type(path) .. ") ", 2)
 	local unsavedFile, index = getUnsaved(Bridge.makefolder, path)
 	if unsavedFile then
@@ -1270,7 +1270,7 @@ function Xeno.delfolder(path)
 		x = path
 	})
 end
-function Xeno.delfile(path)
+function VoidTrace.delfile(path)
 	assert(type(path) == "string", "invalid argument #1 to 'delfile' (string expected, got " .. type(path) .. ") ", 2)
 	local unsavedFile, index = getUnsaved(Bridge.writefile, path)
 	if unsavedFile then
@@ -1285,7 +1285,7 @@ function Xeno.delfile(path)
 	})
 end
 
-function Xeno.getcustomasset(path)
+function VoidTrace.getcustomasset(path)
 	assert(type(path) == "string", "invalid argument #1 to 'getcustomasset' (string expected, got " .. type(path) .. ") ", 2)
 	local unsaved, i, _break = getUnsaved(Bridge.writefile, path), nil
 	while unsaved do 
@@ -1358,13 +1358,13 @@ end
 
 local HashLib, lz4, DrawingLib = getlib("HashLib"), getlib("lz4"), getlib("DrawingLib")
 
-Xeno.base64 = base64
-Xeno.base64_encode = base64.encode
-Xeno.base64encode = base64.encode
-Xeno.base64_decode = base64.decode
-Xeno.base64decode = base64.decode
+VoidTrace.base64 = base64
+VoidTrace.base64_encode = base64.encode
+VoidTrace.base64encode = base64.encode
+VoidTrace.base64_decode = base64.decode
+VoidTrace.base64decode = base64.decode
 
-Xeno.crypt = {
+VoidTrace.crypt = {
 	base64 = base64,
 	base64encode = base64.encode,
 	base64_encode = base64.encode,
@@ -1425,40 +1425,40 @@ Xeno.crypt = {
 		return table.concat(result), b
 	end
 }
-Xeno.crypt.generatebytes = function(len)
-	return Xeno.crypt.generatekey(len)
+VoidTrace.crypt.generatebytes = function(len)
+	return VoidTrace.crypt.generatekey(len)
 end
-Xeno.crypt.random = function(len)
-	return Xeno.crypt.generatekey(len)
+VoidTrace.crypt.random = function(len)
+	return VoidTrace.crypt.generatekey(len)
 end
-Xeno.crypt.decrypt = Xeno.crypt.encrypt
+VoidTrace.crypt.decrypt = VoidTrace.crypt.encrypt
 
-function Xeno.crypt.hash(txt, hashName)
+function VoidTrace.crypt.hash(txt, hashName)
 	for name, func in pairs(HashLib) do
 		if name == hashName or name:gsub("_", "-") == hashName then
 			return func(txt)
 		end
 	end
 end
-Xeno.hash = Xeno.crypt.hash
+VoidTrace.hash = VoidTrace.crypt.hash
 
-Xeno.crypt.lz4 = lz4
-Xeno.crypt.lz4compress = lz4.compress
-Xeno.crypt.lz4decompress = lz4.decompress
+VoidTrace.crypt.lz4 = lz4
+VoidTrace.crypt.lz4compress = lz4.compress
+VoidTrace.crypt.lz4decompress = lz4.decompress
 
-Xeno.lz4 = lz4
-Xeno.lz4compress = lz4.compress
-Xeno.lz4decompress = lz4.decompress
+VoidTrace.lz4 = lz4
+VoidTrace.lz4compress = lz4.compress
+VoidTrace.lz4decompress = lz4.decompress
 
 local Drawing, drawingFunctions = DrawingLib.Drawing, DrawingLib.functions
-Xeno.Drawing = Drawing
+VoidTrace.Drawing = Drawing
 
 for name, func in drawingFunctions do
-	Xeno[name] = func
+	VoidTrace[name] = func
 end
 
 -- / Miscellaneous \ --
-function Xeno.getproperties(instance)
+function VoidTrace.getproperties(instance)
 	assert(typeof(instance) == "Instance", "invalid argument #1 to 'getproperties' (Instance expected, got " .. typeof(instance) .. ") ", 2)
 
 	local objectValue = Instance.new("ObjectValue", objectPointerContainer)
@@ -1475,7 +1475,7 @@ function Xeno.getproperties(instance)
 
 	local properties, filtered = HttpService:JSONDecode(result), {}
 	for _, propertyName in next, properties do
-		local property, wasHidden = Xeno.gethiddenproperty(instance, propertyName)
+		local property, wasHidden = VoidTrace.gethiddenproperty(instance, propertyName)
 		if not wasHidden then
 			filtered[propertyName] = property
 		end
@@ -1484,7 +1484,7 @@ function Xeno.getproperties(instance)
 	return filtered
 end
 
-function Xeno.gethiddenproperties(instance)
+function VoidTrace.gethiddenproperties(instance)
 	assert(typeof(instance) == "Instance", "invalid argument #1 to 'getproperties' (Instance expected, got " .. typeof(instance) .. ") ", 2)
 
 	local objectValue = Instance.new("ObjectValue", objectPointerContainer)
@@ -1501,7 +1501,7 @@ function Xeno.gethiddenproperties(instance)
 
 	local properties, filtered = HttpService:JSONDecode(result), {}
 	for _, propertyName in next, properties do
-		local property, wasHidden = Xeno.gethiddenproperty(instance, propertyName)
+		local property, wasHidden = VoidTrace.gethiddenproperty(instance, propertyName)
 		if wasHidden then
 			filtered[propertyName] = property
 		end
@@ -1511,45 +1511,45 @@ function Xeno.gethiddenproperties(instance)
 end
 
 local _saveinstance = nil
-function Xeno.saveinstance(options)
+function VoidTrace.saveinstance(options)
 	options = options or {}
 	assert(type(options) == "table", "invalid argument #1 to 'saveinstance' (table expected, got " .. type(options) .. ") ", 2)
 	print("saveinstance Powered by UniversalSynSaveInstance | AGPL-3.0 license")
-	_saveinstance = _saveinstance or Xeno.loadstring(Xeno.HttpGet("https://raw.githubusercontent.com/luau/SynSaveInstance/main/saveinstance.luau", true), "saveinstance")()
+	_saveinstance = _saveinstance or VoidTrace.loadstring(VoidTrace.HttpGet("https://raw.githubusercontent.com/luau/SynSaveInstance/main/saveinstance.luau", true), "saveinstance")()
 	return _saveinstance(options)
 end
-Xeno.savegame = Xeno.saveinstance
+VoidTrace.savegame = VoidTrace.saveinstance
 
-function Xeno.getexecutorname()
-	return Xeno.about._name
+function VoidTrace.getexecutorname()
+	return VoidTrace.about._name
 end
-function Xeno.getexecutorversion()
-	return Xeno.about._version
+function VoidTrace.getexecutorversion()
+	return VoidTrace.about._version
 end
 
-function Xeno.identifyexecutor()
-	return Xeno.getexecutorname(), Xeno.getexecutorversion()
+function VoidTrace.identifyexecutor()
+	return VoidTrace.getexecutorname(), VoidTrace.getexecutorversion()
 end
-Xeno.whatexecutor = Xeno.identifyexecutor
+VoidTrace.whatexecutor = VoidTrace.identifyexecutor
 
-function Xeno.get_hwid()
+function VoidTrace.get_hwid()
 	return hwid
 end
-Xeno.gethwid = Xeno.get_hwid
+VoidTrace.gethwid = VoidTrace.get_hwid
 
-function Xeno.getscriptbytecode(script_instance)
+function VoidTrace.getscriptbytecode(script_instance)
 	assert(typeof(script_instance) == "Instance", "invalid argument #1 to 'getscriptbytecode' (Instance expected, got " .. typeof(script_instance) .. ") ", 2)
 	assert(script_instance.ClassName == "LocalScript" or script_instance.ClassName == "ModuleScript", 
 		"invalid 'ClassName' for 'Instance' #1 to 'getscriptbytecode' (LocalScript or ModuleScript expected, got '" .. script_instance.ClassName .. "') ", 2)
 	return Bridge:getscriptbytecode(script_instance)
 end
-Xeno.dumpstring = Xeno.getscriptbytecode
+VoidTrace.dumpstring = VoidTrace.getscriptbytecode
 
 -- Thanks to plusgiant5 for letting me use konstant api
 
 local last_call = 0
 local function konst_call(konstantType: string, scriptPath: Script | ModuleScript | LocalScript): string
-	local success: boolean, bytecode: string = pcall(Xeno.getscriptbytecode, scriptPath)
+	local success: boolean, bytecode: string = pcall(VoidTrace.getscriptbytecode, scriptPath)
 
 	if (not success) then
 		return `-- Failed to get script bytecode, error:\n\n--[[\n{bytecode}\n--]]`
@@ -1559,7 +1559,7 @@ local function konst_call(konstantType: string, scriptPath: Script | ModuleScrip
 	if time_elapsed <= .5 then
 		task.wait(.5 - time_elapsed)
 	end
-	local httpResult = Xeno.request({
+	local httpResult = VoidTrace.request({
 		Url = "http://api.plusgiant5.com" .. konstantType,
 		Body = bytecode,
 		Method = "POST",
@@ -1576,7 +1576,7 @@ local function konst_call(konstantType: string, scriptPath: Script | ModuleScrip
 	end
 end
 
-function Xeno.Decompile(script_instance)
+function VoidTrace.Decompile(script_instance)
 	if typeof(script_instance) ~= "Instance" then
 		return "-- invalid argument #1 to 'Decompile' (Instance expected, got " .. typeof(script_instance) .. ")"
 	end
@@ -1585,10 +1585,10 @@ function Xeno.Decompile(script_instance)
 	end
 	return tostring(konst_call("/konstant/decompile", script_instance)):gsub("\t", "    ")
 end
-Xeno.decompile = Xeno.Decompile
+VoidTrace.decompile = VoidTrace.Decompile
 
 -- for some reason, UniversalSynSaveInstance is using the Disassemble function the same as Decompile.
-function Xeno.__Disassemble(script_instance)
+function VoidTrace.__Disassemble(script_instance)
 	if typeof(script_instance) ~= "Instance" then
 		return "-- invalid argument #1 to 'disassemble' (Instance expected, got " .. typeof(script_instance) .. ")"
 	end
@@ -1597,71 +1597,71 @@ function Xeno.__Disassemble(script_instance)
 	end
 	return tostring(konst_call("/konstant/disassemble", script_instance)):gsub("\t", "    ")
 end
-Xeno.__disassemble = Xeno.__Disassemble
+VoidTrace.__disassemble = VoidTrace.__Disassemble
 
-function Xeno.queue_on_teleport(source)
+function VoidTrace.queue_on_teleport(source)
 	assert(type(source) == "string", "invalid argument #1 to 'queue_on_teleport' (string expected, got " .. type(source) .. ") ", 2)
 	return Bridge:queue_on_teleport("s", source)
 end
-Xeno.queueonteleport = Xeno.queue_on_teleport
+VoidTrace.queueonteleport = VoidTrace.queue_on_teleport
 
-function Xeno.setclipboard(content)
+function VoidTrace.setclipboard(content)
 	assert(type(content) == "string", "invalid argument #1 to 'setclipboard' (string expected, got " .. type(content) .. ") ", 2)
 	return Bridge:setclipboard(content)
 end
-Xeno.toclipboard = Xeno.setclipboard
+VoidTrace.toclipboard = VoidTrace.setclipboard
 
-function Xeno.rconsoleclear()
+function VoidTrace.rconsoleclear()
 	return Bridge:rconsole("cls")
 end
-Xeno.consoleclear = Xeno.rconsoleclear
+VoidTrace.consoleclear = VoidTrace.rconsoleclear
 
-function Xeno.rconsolecreate()
+function VoidTrace.rconsolecreate()
 	return Bridge:rconsole("crt")
 end
-Xeno.consolecreate = Xeno.rconsolecreate
+VoidTrace.consolecreate = VoidTrace.rconsolecreate
 
-function Xeno.rconsoledestroy()
+function VoidTrace.rconsoledestroy()
 	return Bridge:rconsole("dst")
 end
-Xeno.consoledestroy = Xeno.rconsoledestroy
+VoidTrace.consoledestroy = VoidTrace.rconsoledestroy
 
-function Xeno.rconsoleprint(...)
+function VoidTrace.rconsoleprint(...)
 	local text = ""
 	for _, v in {...} do
 		text = text .. tostring(v) .. " "
 	end
 	return Bridge:rconsole("prt", "[-] " .. text)
 end
-Xeno.consoleprint = Xeno.rconsoleprint
+VoidTrace.consoleprint = VoidTrace.rconsoleprint
 
-function Xeno.rconsoleinfo(...)
+function VoidTrace.rconsoleinfo(...)
 	local text = ""
 	for _, v in {...} do
 		text = text .. tostring(v) .. " "
 	end
 	return Bridge:rconsole("prt", "[i] " .. text)
 end
-Xeno.consoleinfo = Xeno.rconsoleinfo
+VoidTrace.consoleinfo = VoidTrace.rconsoleinfo
 
-function Xeno.rconsolewarn(...)
+function VoidTrace.rconsolewarn(...)
 	local text = ""
 	for _, v in {...} do
 		text = text .. tostring(v) .. " "
 	end
 	return Bridge:rconsole("prt", "[!] " .. text)
 end
-Xeno.consolewarn = Xeno.rconsolewarn
+VoidTrace.consolewarn = VoidTrace.rconsolewarn
 
-function Xeno.rconsolesettitle(text)
+function VoidTrace.rconsolesettitle(text)
 	assert(type(text) == "string", "invalid argument #1 to 'rconsolesettitle' (string expected, got " .. type(text) .. ") ", 2)
 	return Bridge:rconsole("ttl", text)
 end
-Xeno.rconsolename = Xeno.rconsolesettitle
-Xeno.consolesettitle = Xeno.rconsolesettitle
-Xeno.consolename = Xeno.rconsolesettitle
+VoidTrace.rconsolename = VoidTrace.rconsolesettitle
+VoidTrace.consolesettitle = VoidTrace.rconsolesettitle
+VoidTrace.consolename = VoidTrace.rconsolesettitle
 
-function Xeno.clonefunction(func)
+function VoidTrace.clonefunction(func)
 	assert(type(func) == "function", "invalid argument #1 to 'clonefunction' (function expected, got " .. type(func) .. ") ", 2)
 	local a = func
 	local b = xpcall(setfenv, function(x, y)
@@ -1679,29 +1679,29 @@ function Xeno.clonefunction(func)
 	end)
 end
 
-function Xeno.islclosure(func)
+function VoidTrace.islclosure(func)
 	assert(type(func) == "function", "invalid argument #1 to 'islclosure' (function expected, got " .. type(func) .. ") ", 2)
 	local success = pcall(function()
 		return setfenv(func, getfenv(func))
 	end)
 	return success
 end
-function Xeno.iscclosure(func)
+function VoidTrace.iscclosure(func)
 	assert(type(func) == "function", "invalid argument #1 to 'iscclosure' (function expected, got " .. type(func) .. ") ", 2)
 	for i, v in originalFunctions do
 		if func == v then
 			return true
 		end
 	end
-	return not Xeno.islclosure(func)
+	return not VoidTrace.islclosure(func)
 end
-function Xeno.newlclosure(func)
+function VoidTrace.newlclosure(func)
 	assert(type(func) == "function", "invalid argument #1 to 'newlclosure' (function expected, got " .. type(func) .. ") ", 2)
 	return function(...)
 		return func(...)
 	end
 end
-function Xeno.newcclosure(func)
+function VoidTrace.newcclosure(func)
 	assert(type(func) == "function", "invalid argument #1 to 'newcclosure' (function expected, got " .. type(func) .. ") ", 2)
 	return coroutine.wrap(function(...)
 		while true do
@@ -1710,7 +1710,7 @@ function Xeno.newcclosure(func)
 	end)
 end
 
-function Xeno.fireclickdetector(part)
+function VoidTrace.fireclickdetector(part)
 	assert(typeof(part) == "Instance", "invalid argument #1 to 'fireclickdetector' (Instance expected, got " .. type(part) .. ") ", 2)
 	local clickDetector = part:FindFirstChild("ClickDetector") or part
 	local previousParent = clickDetector.Parent
@@ -1748,7 +1748,7 @@ end
 
 -- I did not make this method  for firetouchinterest
 local touchers_reg = setmetatable({}, { __mode = "ks" })
-function Xeno.firetouchinterest(toucher, toTouch, touch_state)
+function VoidTrace.firetouchinterest(toucher, toTouch, touch_state)
 	assert(typeof(toucher) == "Instance", "invalid argument #1 to 'firetouchinterest' (Instance expected, got " .. type(toucher) .. ") ")
 	assert(typeof(toTouch) == "Instance", "invalid argument #2 to 'firetouchinterest' (Instance expected, got " .. type(toTouch) .. ") ")
 	assert(type(touch_state) == "number", "invalid argument #3 to 'firetouchinterest' (number expected, got " .. type(touch_state) .. ") ")
@@ -1757,7 +1757,7 @@ function Xeno.firetouchinterest(toucher, toTouch, touch_state)
 		touchers_reg[toucher] = {}
 	end
 
-	local toTouchAddress = tostring(Xeno.Xeno.get_real_address(toTouch))
+	local toTouchAddress = tostring(VoidTrace.VoidTrace.get_real_address(toTouch))
 
 	if touch_state == 0 then
 		if touchers_reg[toucher][toTouchAddress] then return end
@@ -1768,7 +1768,7 @@ function Xeno.firetouchinterest(toucher, toTouch, touch_state)
 		newPart.Anchored = true
 		newPart.Transparency = 1
 
-		Xeno.Xeno.spoof_instance(newPart, toTouch)
+		VoidTrace.VoidTrace.spoof_instance(newPart, toTouch)
 		touchers_reg[toucher][toTouchAddress] = task.spawn(function()
 			while task.wait() do
 				newPart.CFrame = toucher.CFrame
@@ -1776,14 +1776,14 @@ function Xeno.firetouchinterest(toucher, toTouch, touch_state)
 		end)
 	elseif touch_state == 1 then
 		if not touchers_reg[toucher][toTouchAddress] then return end
-		Xeno.Xeno.spoof_instance(toTouch, tonumber(toTouchAddress))
+		VoidTrace.VoidTrace.spoof_instance(toTouch, tonumber(toTouchAddress))
 		local toucher_thread = touchers_reg[toucher][toTouchAddress]
 		task.cancel(toucher_thread)
 		touchers_reg[toucher][toTouchAddress] = nil
 	end
 end
 
-function Xeno.fireproximityprompt(proximityprompt, amount, skip)
+function VoidTrace.fireproximityprompt(proximityprompt, amount, skip)
 	assert(typeof(proximityprompt) == "Instance", "invalid argument #1 to 'fireproximityprompt' (Instance expected, got " .. typeof(proximityprompt) .. ") ", 2)
 	assert(proximityprompt:IsA("ProximityPrompt"), "invalid argument #1 to 'fireproximityprompt' (ProximityPrompt expected, got " .. proximityprompt.ClassName .. ") ", 2)
 
@@ -1812,7 +1812,7 @@ function Xeno.fireproximityprompt(proximityprompt, amount, skip)
 	proximityprompt.HoldDuration = oldHoldDuration
 end
 
-function Xeno.setsimulationradius(newRadius, newMaxRadius)
+function VoidTrace.setsimulationradius(newRadius, newMaxRadius)
 	newRadius = tonumber(newRadius)
 	newMaxRadius = tonumber(newMaxRadius) or newRadius
 	assert(type(newRadius) == "number", "invalid argument #1 to 'setsimulationradius' (number expected, got " .. type(newRadius) .. ") ", 2)
@@ -1824,19 +1824,19 @@ function Xeno.setsimulationradius(newRadius, newMaxRadius)
 	end
 end
 
-function Xeno.isreadonly(t)
+function VoidTrace.isreadonly(t)
 	assert(type(t) == "table", "invalid argument #1 to 'isreadonly' (table expected, got " .. type(t) .. ") ", 2)
 	return table.isfrozen(t)
 end
 
 -- / Broken - Not working - Not accurate \ --
-function Xeno.rconsoleinput(text)
+function VoidTrace.rconsoleinput(text)
 	task.wait()
 	return "N/A"
 end
-Xeno.consoleinput = Xeno.rconsoleinput
+VoidTrace.consoleinput = VoidTrace.rconsoleinput
 
-function Xeno.gethiddenproperty(instance, property)
+function VoidTrace.gethiddenproperty(instance, property)
 	assert(typeof(instance) == "Instance", "invalid argument #1 to 'gethiddenproperty' (Instance expected, got " .. typeof(instance) .. ") ", 2)
 	local success, r = pcall(function()
 		return instance[property]
@@ -1910,19 +1910,19 @@ local renv = {
 		traceback = debug.traceback, profilebegin = debug.profilebegin, profileend = debug.profileend,
 	},
 
-	game = Xeno.game, workspace = Xeno.workspace, Game = Xeno.game, Workspace = Xeno.workspace,
+	game = VoidTrace.game, workspace = VoidTrace.workspace, Game = VoidTrace.game, Workspace = VoidTrace.workspace,
 
 	getmetatable = getmetatable, setmetatable = setmetatable
 }
 table.freeze(renv)
 
-function Xeno.getrenv()
+function VoidTrace.getrenv()
 	return renv
 end
 
-function Xeno.isexecutorclosure(func)
+function VoidTrace.isexecutorclosure(func)
 	assert(type(func) == "function", "invalid argument #1 to 'isexecutorclosure' (function expected, got " .. type(func) .. ") ", 2)
-	for _, genv in Xeno.getgenv() do
+	for _, genv in VoidTrace.getgenv() do
 		if genv == func then
 			return true
 		end
@@ -1939,13 +1939,13 @@ function Xeno.isexecutorclosure(func)
 		end
 		return isglobal
 	end
-	if check(Xeno.getgenv().getrenv()) then
+	if check(VoidTrace.getgenv().getrenv()) then
 		return false
 	end
 	return true
 end
-Xeno.checkclosure = Xeno.isexecutorclosure
-Xeno.isourclosure = Xeno.isexecutorclosure
+VoidTrace.checkclosure = VoidTrace.isexecutorclosure
+VoidTrace.isourclosure = VoidTrace.isexecutorclosure
 
 local windowActive = true
 UserInputService.WindowFocused:Connect(function()
@@ -1955,19 +1955,19 @@ UserInputService.WindowFocusReleased:Connect(function()
 	windowActive = false
 end)
 
-function Xeno.isrbxactive()
+function VoidTrace.isrbxactive()
 	return windowActive
 end
-Xeno.isgameactive = Xeno.isrbxactive
-Xeno.iswindowactive = Xeno.isrbxactive
+VoidTrace.isgameactive = VoidTrace.isrbxactive
+VoidTrace.iswindowactive = VoidTrace.isrbxactive
 
-function Xeno.getinstances()
+function VoidTrace.getinstances()
 	return _game:GetDescendants()
 end
 
 local nilinstances, cache = {Instance.new("Part")}, {cached = {}}
 
-function Xeno.getnilinstances()
+function VoidTrace.getnilinstances()
 	return nilinstances
 end
 
@@ -1987,9 +1987,9 @@ function cache.replace(x, y)
 	x.Parent = nil
 end
 
-Xeno.cache = cache
+VoidTrace.cache = cache
 
-function Xeno.getgc()
+function VoidTrace.getgc()
 	return table.clone(nilinstances)
 end
 
@@ -2010,18 +2010,18 @@ _game.DescendantAdded:Connect(function(des)
 	cache.cached[des] = true
 end)
 
-function Xeno.getrunningscripts()
+function VoidTrace.getrunningscripts()
 	local scripts = {}
-	for _, v in pairs(Xeno.getinstances()) do
+	for _, v in pairs(VoidTrace.getinstances()) do
 		if v:IsA("LocalScript") and v.Enabled then table.insert(scripts, v) end
 	end
 	return scripts
 end
-Xeno.getscripts = Xeno.getrunningscripts
+VoidTrace.getscripts = VoidTrace.getrunningscripts
 
-function Xeno.getloadedmodules()
+function VoidTrace.getloadedmodules()
 	local modules = {}
-	for _, v in pairs(Xeno.getinstances()) do
+	for _, v in pairs(VoidTrace.getinstances()) do
 		if v:IsA("ModuleScript") then 
 			table.insert(modules, v)
 		end
@@ -2029,24 +2029,24 @@ function Xeno.getloadedmodules()
 	return modules
 end
 
-function Xeno.checkcaller()
-	local info = debug.info(Xeno.getgenv, 'slnaf')
+function VoidTrace.checkcaller()
+	local info = debug.info(VoidTrace.getgenv, 'slnaf')
 	return debug.info(1, 'slnaf')==info
 end
 
-function Xeno.getthreadcontext()
+function VoidTrace.getthreadcontext()
 	return 3
 end
-Xeno.getthreadidentity = Xeno.getthreadcontext
-Xeno.getidentity = Xeno.getthreadcontext
+VoidTrace.getthreadidentity = VoidTrace.getthreadcontext
+VoidTrace.getidentity = VoidTrace.getthreadcontext
 
-function Xeno.setthreadidentity()
+function VoidTrace.setthreadidentity()
 	return 3, "Not Implemented"
 end
-Xeno.setidentity = Xeno.setthreadidentity
-Xeno.setthreadcontext = Xeno.setthreadidentity
+VoidTrace.setidentity = VoidTrace.setthreadidentity
+VoidTrace.setthreadcontext = VoidTrace.setthreadidentity
 
-function Xeno.getsenv(script_instance)
+function VoidTrace.getsenv(script_instance)
 	local env = getfenv(debug.info(2, 'f'))
 	return setmetatable({
 		script = script_instance,
@@ -2064,13 +2064,13 @@ function Xeno.getsenv(script_instance)
 	})
 end
 
-function Xeno.getscripthash(instance) -- !
+function VoidTrace.getscripthash(instance) -- !
 	assert(typeof(instance) == "Instance", "invalid argument #1 to 'getscripthash' (Instance expected, got " .. typeof(instance) .. ") ", 2)
 	assert(instance:IsA("LuaSourceContainer"), "invalid argument #1 to 'getscripthash' (LuaSourceContainer expected, got " .. instance.ClassName .. ") ", 2)
 	return instance:GetHash()
 end
 
-function Xeno.getconnections()
+function VoidTrace.getconnections()
 	return {{
 		Enabled = true, 
 		ForeignState = false, 
@@ -2085,7 +2085,7 @@ function Xeno.getconnections()
 	}}
 end
 
-function Xeno.hookfunction(func, rep)
+function VoidTrace.hookfunction(func, rep)
 	local env = getfenv(debug.info(2, 'f'))
 	for i, v in pairs(env) do
 		if v == func then
@@ -2094,9 +2094,9 @@ function Xeno.hookfunction(func, rep)
 		end
 	end
 end
-Xeno.replaceclosure = Xeno.hookfunction
+VoidTrace.replaceclosure = VoidTrace.hookfunction
 
-function Xeno.cloneref(reference)
+function VoidTrace.cloneref(reference)
 	if _game:FindFirstChild(reference.Name) or reference.Parent == _game then 
 		return reference
 	else
@@ -2117,18 +2117,18 @@ function Xeno.cloneref(reference)
 	end
 end
 
-function Xeno.compareinstances(x, y)
+function VoidTrace.compareinstances(x, y)
 	if type(getmetatable(y)) == "table" then
 		return x.ClassName == y.ClassName
 	end
 	return false
 end
 
-function Xeno.gethui()
-	return Xeno.cloneref(_game:FindService("CoreGui"))
+function VoidTrace.gethui()
+	return VoidTrace.cloneref(_game:FindService("CoreGui"))
 end
 
-function Xeno.isnetworkowner(part)
+function VoidTrace.isnetworkowner(part)
 	assert(typeof(part) == "Instance", "invalid argument #1 to 'isnetworkowner' (Instance expected, got " .. type(part) .. ") ")
 	if part.Anchored then
 		return false
@@ -2136,7 +2136,7 @@ function Xeno.isnetworkowner(part)
 	return part.ReceiveAge == 0
 end
 
-function Xeno.deepclone(object) -- used for initialization
+function VoidTrace.deepclone(object) -- used for initialization
 	local lookup = {}
 	local function copy(obj)
 		if type(obj) ~= 'table' then return obj end
@@ -2150,8 +2150,8 @@ function Xeno.deepclone(object) -- used for initialization
 	return copy(object)
 end
 
-Xeno.debug = table.clone(debug) -- the debug funcs was not by me (.rizve) credits goes to the person that made it
-function Xeno.debug.getinfo(f, options)
+VoidTrace.debug = table.clone(debug) -- the debug funcs was not by me (.rizve) credits goes to the person that made it
+function VoidTrace.debug.getinfo(f, options)
 	if type(options) == "string" then
 		options = string.lower(options) 
 	else
@@ -2183,7 +2183,7 @@ function Xeno.debug.getinfo(f, options)
 	return result
 end
 
-function Xeno.debug.getmetatable(table_or_userdata)
+function VoidTrace.debug.getmetatable(table_or_userdata)
 	local result = getmetatable(table_or_userdata)
 
 	if result == nil then
@@ -2316,24 +2316,24 @@ function Xeno.debug.getmetatable(table_or_userdata)
 	return real_metamethods
 end
 
-Xeno.debug.setmetatable = setmetatable
+VoidTrace.debug.setmetatable = setmetatable
 
-function Xeno.getrawmetatable(object)
+function VoidTrace.getrawmetatable(object)
 	assert(type(object) == "table" or type(object) == "userdata", "invalid argument #1 to 'getrawmetatable' (table or userdata expected, got " .. type(object) .. ")", 2)
-	local raw_mt = Xeno.debug.getmetatable(object)
+	local raw_mt = VoidTrace.debug.getmetatable(object)
 	if raw_mt and raw_mt.__metatable then
 		raw_mt.__metatable = nil 
-		local result_mt = Xeno.debug.getmetatable(object)
+		local result_mt = VoidTrace.debug.getmetatable(object)
 		raw_mt.__metatable = "Locked!"
 		return result_mt
 	end
 	return raw_mt
 end
 
-function Xeno.setrawmetatable(object, newmetatbl)
+function VoidTrace.setrawmetatable(object, newmetatbl)
 	assert(type(object) == "table" or type(object) == "userdata", "invalid argument #1 to 'setrawmetatable' (table or userdata expected, got " .. type(object) .. ")", 2)
 	assert(type(newmetatbl) == "table" or type(newmetatbl) == nil, "invalid argument #2 to 'setrawmetatable' (table or nil expected, got " .. type(object) .. ")", 2)
-	local raw_mt = Xeno.debug.getmetatable(object)
+	local raw_mt = VoidTrace.debug.getmetatable(object)
 	if raw_mt and raw_mt.__metatable then
 		local old_metatable = raw_mt.__metatable
 		raw_mt.__metatable = nil  
@@ -2348,19 +2348,19 @@ function Xeno.setrawmetatable(object, newmetatbl)
 	return true
 end
 
-function Xeno.hookmetamethod(t, index, func)
+function VoidTrace.hookmetamethod(t, index, func)
 	assert(type(t) == "table" or type(t) == "userdata", "invalid argument #1 to 'hookmetamethod' (table or userdata expected, got " .. type(t) .. ")", 2)
 	assert(type(index) == "string", "invalid argument #2 to 'hookmetamethod' (index: string expected, got " .. type(t) .. ")", 2)
 	assert(type(func) == "function", "invalid argument #3 to 'hookmetamethod' (function expected, got " .. type(t) .. ")", 2)
 	local o = t
-	local mt = Xeno.debug.getmetatable(t)
+	local mt = VoidTrace.debug.getmetatable(t)
 	mt[index] = func
 	t = mt
 	return o
 end
 
 local fpscap = math.huge
-function Xeno.setfpscap(cap)
+function VoidTrace.setfpscap(cap)
 	cap = tonumber(cap)
 	assert(type(cap) == "number", "invalid argument #1 to 'setfpscap' (number expected, got " .. type(cap) .. ")", 2)
 	if cap < 1 then cap = math.huge end
@@ -2373,11 +2373,11 @@ RunService.RenderStepped:Connect(function()
 
 	task.wait()
 end)
-function Xeno.getfpscap()
+function VoidTrace.getfpscap()
 	return fpscap
 end
 
-function Xeno.mouse1click(x, y)
+function VoidTrace.mouse1click(x, y)
 	x = x or 0
 	y = y or 0
 
@@ -2386,21 +2386,21 @@ function Xeno.mouse1click(x, y)
 	VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, _game, false)
 end
 
-function Xeno.mouse1press(x, y)
+function VoidTrace.mouse1press(x, y)
 	x = x or 0
 	y = y or 0
 
 	VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, _game, false)
 end
 
-function Xeno.mouse1release(x, y)
+function VoidTrace.mouse1release(x, y)
 	x = x or 0
 	y = y or 0
 
 	VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, _game, false)
 end
 
-function Xeno.mouse2click(x, y)
+function VoidTrace.mouse2click(x, y)
 	x = x or 0
 	y = y or 0
 
@@ -2409,25 +2409,25 @@ function Xeno.mouse2click(x, y)
 	VirtualInputManager:SendMouseButtonEvent(x, y, 1, false, _game, false)
 end
 
-function Xeno.mouse2press(x, y)
+function VoidTrace.mouse2press(x, y)
 	x = x or 0
 	y = y or 0
 
 	VirtualInputManager:SendMouseButtonEvent(x, y, 1, true, _game, false)
 end
 
-function Xeno.mouse2release(x, y)
+function VoidTrace.mouse2release(x, y)
 	x = x or 0
 	y = y or 0
 
 	VirtualInputManager:SendMouseButtonEvent(x, y, 1, false, _game, false)
 end
 
-function Xeno.mousescroll(x, y, z)
+function VoidTrace.mousescroll(x, y, z)
 	VirtualInputManager:SendMouseWheelEvent(x or 0, y or 0, z or false, _game)
 end
 
-function Xeno.mousemoverel(x, y)
+function VoidTrace.mousemoverel(x, y)
 	x = x or 0
 	y = y or 0
 
@@ -2438,23 +2438,23 @@ function Xeno.mousemoverel(x, y)
 	VirtualInputManager:SendMouseMoveEvent(x, y, _game)
 end
 
-function Xeno.mousemoveabs(x, y)
+function VoidTrace.mousemoveabs(x, y)
 	x = x or 0
 	y = y or 0
 
 	VirtualInputManager:SendMouseMoveEvent(x, y, _game)
 end
 
-function Xeno.getscriptclosure(s)
+function VoidTrace.getscriptclosure(s)
 	return function()
-		return table.clone(Xeno.require(s))
+		return table.clone(VoidTrace.require(s))
 	end
 end
-Xeno.getscriptfunction = Xeno.getscriptclosure
+VoidTrace.getscriptfunction = VoidTrace.getscriptclosure
 
 local ssbs = {}
 
-function Xeno.isscriptable(object, property)
+function VoidTrace.isscriptable(object, property)
 	if object and typeof(object) == 'Instance' then
 		local s, r = pcall(function()
 			return ssbs[object][property]
@@ -2470,9 +2470,9 @@ function Xeno.isscriptable(object, property)
 	return false
 end
 
-function Xeno.setscriptable(object, property, bool)
+function VoidTrace.setscriptable(object, property, bool)
 	if object and typeof(object) == 'Instance' and property then
-		local scriptable = Xeno.isscriptable(object, property)
+		local scriptable = VoidTrace.isscriptable(object, property)
 		local s = pcall(function()
 			ssbs[object][property] = bool
 		end)
@@ -2483,7 +2483,7 @@ function Xeno.setscriptable(object, property, bool)
 	end
 end
 
-originalFunctions = table.clone(Xeno)
+originalFunctions = table.clone(VoidTrace)
 
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
@@ -2499,7 +2499,7 @@ task.spawn(function() -- queue_on_teleport handler
 	local source = Bridge:queue_on_teleport("g")
 	if type(source) == "string" and source ~= "" then
 		local rawLoadstringFunc = Bridge:loadstring(source, "queue_on_teleport")
-		setfenv(rawLoadstringFunc, merge(getfenv(rawLoadstringFunc), Xeno))
+		setfenv(rawLoadstringFunc, merge(getfenv(rawLoadstringFunc), VoidTrace))
 		task.spawn(rawLoadstringFunc)
 	end
 end)
@@ -2514,7 +2514,7 @@ task.spawn(function() -- auto execute
 	})
 	if result and result.Success and result.Body ~= "" then
 		local rawLoadstringFunc = Bridge:loadstring(result.Body, "autoexec")
-		setfenv(rawLoadstringFunc, merge(getfenv(rawLoadstringFunc), Xeno))
+		setfenv(rawLoadstringFunc, merge(getfenv(rawLoadstringFunc), VoidTrace))
 		task.spawn(rawLoadstringFunc)
 	end
 end)
@@ -2527,7 +2527,7 @@ local function listen(coreModule)
 		end)
 		if type(execution_table) == "table" and execution_table["x e n o"] and (not execution_table.__executed) and coreModule.Parent == scriptsContainer then
 			local execLoad = execution_table["x e n o"]
-			setfenv(execLoad, merge(getfenv(execLoad), Xeno))
+			setfenv(execLoad, merge(getfenv(execLoad), VoidTrace))
 			task.spawn(execLoad)
 
 			execution_table.__executed = true

@@ -264,7 +264,7 @@ RBXClient::RBXClient(DWORD processID) :
     // In-game, hooking a module that has custom bytecode we are writing.
 
     auto RobloxReplicatedStorage = DataModel.FindFirstChildOfClass("RobloxReplicatedStorage");
-    if (RobloxReplicatedStorage->FindFirstChild("Xeno")) {
+    if (RobloxReplicatedStorage->FindFirstChild("VoidTrace")) {
         std::cerr << "[!] Client '" << Username << "' is already attached\n";
         // When player serverhops the GUID is going to be replaced with the new one. This fixes the communication with the bridge
         PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource));
@@ -370,7 +370,7 @@ void RBXClient::execute(const std::string& source) const {
     if (!RobloxReplicatedStorage)
         return;
 
-    auto xenoFolder = RobloxReplicatedStorage->FindFirstChild("Xeno");
+    auto xenoFolder = RobloxReplicatedStorage->FindFirstChild("VoidTrace");
     if (!xenoFolder)
         return;
 
@@ -382,7 +382,7 @@ void RBXClient::execute(const std::string& source) const {
     if (!xenoModule)
         return;
 
-    xenoModule->SetBytecode(Compile("return {['x e n o']=function(...)do local function s(i, v)getfenv(debug.info(0, 'f'))[i] = v;getfenv(debug.info(1, 'f'))[i] = v;end;for i,v in pairs(getfenv(debug.info(1,'f')))do s(i, v)end;setmetatable(getgenv(),{__newindex=function(t,i,v)rawset(t,i,v)s(i,v)end})end;" + source +"\nend}"), true);
+    xenoModule->SetBytecode(Compile("return {['v o i d t r a c e']=function(...)do local function s(i, v)getfenv(debug.info(0, 'f'))[i] = v;getfenv(debug.info(1, 'f'))[i] = v;end;for i,v in pairs(getfenv(debug.info(1,'f')))do s(i, v)end;setmetatable(getgenv(),{__newindex=function(t,i,v)rawset(t,i,v)s(i,v)end})end;" + source +"\nend}"), true);
     
     xenoModule->UnlockModule();
 }
@@ -395,7 +395,7 @@ bool RBXClient::loadstring(const std::string& source, const std::string& script_
     if (!RobloxReplicatedStorage)
         return false;
 
-    auto xenoFolder = RobloxReplicatedStorage->FindFirstChild("Xeno");
+    auto xenoFolder = RobloxReplicatedStorage->FindFirstChild("VoidTrace");
     if (!xenoFolder)
         return false;
 
@@ -417,7 +417,7 @@ std::uintptr_t RBXClient::GetObjectValuePtr(const std::string_view objectval_nam
     Instance DataModel(dataModel_Address, handle);
     auto RobloxReplicatedStorage = DataModel.FindFirstChildOfClass("RobloxReplicatedStorage");
 
-    auto xenoFolder = RobloxReplicatedStorage->FindFirstChild("Xeno");
+    auto xenoFolder = RobloxReplicatedStorage->FindFirstChild("VoidTrace");
     if (!xenoFolder)
         return 0;
 

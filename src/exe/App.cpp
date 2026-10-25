@@ -1721,22 +1721,27 @@ void do_attach() {
         return;
     }
 
-    // External-mode shortcut: Xeno tracks Roblox PIDs on its own thread.
-    // If one is already seen, we're effectively attached — skip the DLL
-    // injection pipeline entirely and report ready.
+    // Truthful state reporting (per architecture brief):
+    //   - A process being detected is NOT attachment.
+    //   - A ready backend requires a confirmed handshake.
+    // In the default (safe) build vt::xeno::clients() is always empty,
+    // so this block never short-circuits and the UI never claims an
+    // attachment it cannot prove. In the opt-in live build the row's
+    // handshake field is the only signal that promotes state to ready.
     if (vt::xeno::is_running()) {
         const auto rows = vt::xeno::clients();
-        if (!rows.empty()) {
-            set_progress(100, L"Attached (external)");
-            std::wstring who;
-            for (const auto& r : rows) {
-                if (!who.empty()) who += L", ";
-                who += std::wstring(r.username.begin(), r.username.end());
-            }
-            notify(L"Runtime", L"Attached (external) · " + who);
-            VT_LOG(L"xeno: attach shortcut — " +
-                   std::to_wstring(rows.size()) + L" client(s)");
-            return;
+        if (rows.empty()) {
+            set_progress(10, L"BackendStarting");
+        } else {
+            set_progress(50, L"TargetDetected");
+            notify(L"Runtime",
+                   L"Target detected (" + std::to_wstring(rows.size()) +
+                   L") — awaiting backend handshake");
+            VT_LOG(L"voidtrace: target detected x" +
+                   std::to_wstring(rows.size()) +
+                   L" — no handshake yet, not labelling attached");
+            // Do NOT return early. The internal fallback below may be
+            // the only path that reaches a verified ready state.
         }
     }
 
@@ -1767,26 +1772,46 @@ void do_execute() {
     }
     const std::wstring nm = (g_cur >= 0 && g_cur < (int)g_docs.size()) ? g_docs[g_cur].name : L"script";
 
-    // Preferred path: Xeno external backend. No DLL, no pipe, no offset
-    // sync — if any Roblox client is tracked, dispatch immediately.
+    // Compile-check first. Report truthfully whether the source even
+    // parses before we talk to any backend.
+    {
+        const std::string diag = vt::xeno::compilable(raw);
+        if (diag != "success") {
+            notify(L"Runtime", L"Compile error — " +
+                   std::wstring(diag.begin(), diag.end()));
+            VT_LOG(L"voidtrace: compile diagnostic for " + nm);
+            return;
+        }
+    }
+
+    // External backend. In the default (safe) build execute() returns 0
+    // and the state does not advance to "executed" — the UI reports
+    // "RequestSent (no live runtime)". In the opt-in live build
+    // execute() returns the per-client dispatch count; even then the
+    // UI must wait for a RuntimeAcknowledged signal from the bootstrap
+    // before showing "Executed". That signal is not wired yet, so this
+    // code labels the result "RequestSent" rather than "Executed".
     if (vt::xeno::is_running()) {
         const auto rows = vt::xeno::clients();
         if (!rows.empty()) {
-            const std::size_t sent = vt::xeno::execute(expand_loadstring_http(raw));
+            const std::size_t sent =
+                vt::xeno::execute(expand_loadstring_http(raw));
             if (sent > 0) {
                 notify(L"Runtime",
-                       L"Executed  " + nm + L"  →  " +
-                       std::to_wstring(sent) + L" client" +
-                       (sent == 1 ? L"" : L"s"));
-                VT_LOG(L"xeno: Execute " + nm + L" → " +
-                       std::to_wstring(sent) + L" clients");
+                       L"RequestSent  " + nm + L"  →  " +
+                       std::to_wstring(sent) + L" target" +
+                       (sent == 1 ? L"" : L"s") +
+                       L" (awaiting ack)");
+                VT_LOG(L"voidtrace: request sent " + nm + L" →  " +
+                       std::to_wstring(sent) + L" targets");
                 return;
             }
-        } else {
-            // Xeno online but no client yet. Give the tracker a brief
-            // window to attach before falling back to the pipe path.
-            notify(L"Runtime", L"Waiting for Roblox — open a game first");
+            notify(L"Runtime",
+                   L"Compile OK — no live runtime linked in this build");
+            return;
         }
+        notify(L"Runtime",
+               L"Compile OK — no target detected (open Roblox + Attach)");
     }
 
     // Fallback: internal manual-map backend via the named pipe.

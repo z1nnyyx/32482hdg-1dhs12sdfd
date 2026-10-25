@@ -30,3 +30,4 @@ config/local.json
 !third_party/**
 .cache/
 compile_commands.json
+build-tests/
