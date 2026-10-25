@@ -16,6 +16,7 @@
 #include "shared/Log.h"
 #include "shared/PipeKey.h"
 #include "shared/Utils.h"
+#include "xeno/XenoMode.h"
 
 #include <CommDlg.h>
 #include <psapi.h>
@@ -900,6 +901,11 @@ static void do_deferred_init() {
     g_init_step = 4; scan_cfg_gadget();
     g_init_step = 5; Payload::seed();
     g_init_step = 6; Config::instance().load(data_root() / L"config" / L"offsets.json");
+    // External execution backend (Xeno-style). Non-fatal if it fails to
+    // bind the httplib port — do_execute() falls back to the internal
+    // manual-map DLL path automatically.
+    try { vt::xeno::start(); VT_LOG(L"xeno: external backend online"); }
+    catch (...) { VT_WARN(L"xeno: start() threw — external mode disabled"); }
     auto& cfg = Config::instance().get();
     cfg.auto_attach = false;
     g_auto_attach = false;
@@ -1714,6 +1720,26 @@ void do_attach() {
         notify(L"VoidTrace", L"Still initialising — wait a moment and try again");
         return;
     }
+
+    // External-mode shortcut: Xeno tracks Roblox PIDs on its own thread.
+    // If one is already seen, we're effectively attached — skip the DLL
+    // injection pipeline entirely and report ready.
+    if (vt::xeno::is_running()) {
+        const auto rows = vt::xeno::clients();
+        if (!rows.empty()) {
+            set_progress(100, L"Attached (external)");
+            std::wstring who;
+            for (const auto& r : rows) {
+                if (!who.empty()) who += L", ";
+                who += std::wstring(r.username.begin(), r.username.end());
+            }
+            notify(L"Runtime", L"Attached (external) · " + who);
+            VT_LOG(L"xeno: attach shortcut — " +
+                   std::to_wstring(rows.size()) + L" client(s)");
+            return;
+        }
+    }
+
     if (g_attach_busy.exchange(true)) {
         toast(L"Already attaching");
         return;
@@ -1740,6 +1766,30 @@ void do_execute() {
         return;
     }
     const std::wstring nm = (g_cur >= 0 && g_cur < (int)g_docs.size()) ? g_docs[g_cur].name : L"script";
+
+    // Preferred path: Xeno external backend. No DLL, no pipe, no offset
+    // sync — if any Roblox client is tracked, dispatch immediately.
+    if (vt::xeno::is_running()) {
+        const auto rows = vt::xeno::clients();
+        if (!rows.empty()) {
+            const std::size_t sent = vt::xeno::execute(expand_loadstring_http(raw));
+            if (sent > 0) {
+                notify(L"Runtime",
+                       L"Executed  " + nm + L"  →  " +
+                       std::to_wstring(sent) + L" client" +
+                       (sent == 1 ? L"" : L"s"));
+                VT_LOG(L"xeno: Execute " + nm + L" → " +
+                       std::to_wstring(sent) + L" clients");
+                return;
+            }
+        } else {
+            // Xeno online but no client yet. Give the tracker a brief
+            // window to attach before falling back to the pipe path.
+            notify(L"Runtime", L"Waiting for Roblox — open a game first");
+        }
+    }
+
+    // Fallback: internal manual-map backend via the named pipe.
     if (!g_rbx || !g_injected || g_mapped_pid != (g_rbx ? g_rbx->pid : 0) || !g_mod_ready) {
         g_pending_exec = expand_loadstring_http(raw);
         notify(L"Runtime", L"Queued  " + nm + L" — attaching");
