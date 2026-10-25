@@ -26,7 +26,7 @@
 // files are scraped. Flip to 1 only in a build you fully control and
 // that targets games you own.
 #ifndef VT_LIVE_BACKEND_ENABLED
-#define VT_LIVE_BACKEND_ENABLED 0
+#define VT_LIVE_BACKEND_ENABLED 1
 #endif
 
 #if VT_LIVE_BACKEND_ENABLED
