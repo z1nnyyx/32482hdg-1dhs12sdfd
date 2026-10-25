@@ -16,6 +16,7 @@
 #include "shared/Log.h"
 #include "shared/PipeKey.h"
 #include "shared/Utils.h"
+#include "xeno/XenoMode.h"
 
 #include <CommDlg.h>
 #include <psapi.h>
@@ -900,6 +901,11 @@ static void do_deferred_init() {
     g_init_step = 4; scan_cfg_gadget();
     g_init_step = 5; Payload::seed();
     g_init_step = 6; Config::instance().load(data_root() / L"config" / L"offsets.json");
+    // External execution backend (Xeno-style). Non-fatal if it fails to
+    // bind the httplib port — do_execute() falls back to the internal
+    // manual-map DLL path automatically.
+    try { vt::xeno::start(); VT_LOG(L"xeno: external backend online"); }
+    catch (...) { VT_WARN(L"xeno: start() threw — external mode disabled"); }
     auto& cfg = Config::instance().get();
     cfg.auto_attach = false;
     g_auto_attach = false;
@@ -1714,6 +1720,31 @@ void do_attach() {
         notify(L"VoidTrace", L"Still initialising — wait a moment and try again");
         return;
     }
+
+    // Truthful state reporting (per architecture brief):
+    //   - A process being detected is NOT attachment.
+    //   - A ready backend requires a confirmed handshake.
+    // In the default (safe) build vt::xeno::clients() is always empty,
+    // so this block never short-circuits and the UI never claims an
+    // attachment it cannot prove. In the opt-in live build the row's
+    // handshake field is the only signal that promotes state to ready.
+    if (vt::xeno::is_running()) {
+        const auto rows = vt::xeno::clients();
+        if (rows.empty()) {
+            set_progress(10, L"BackendStarting");
+        } else {
+            set_progress(50, L"TargetDetected");
+            notify(L"Runtime",
+                   L"Target detected (" + std::to_wstring(rows.size()) +
+                   L") — awaiting backend handshake");
+            VT_LOG(L"voidtrace: target detected x" +
+                   std::to_wstring(rows.size()) +
+                   L" — no handshake yet, not labelling attached");
+            // Do NOT return early. The internal fallback below may be
+            // the only path that reaches a verified ready state.
+        }
+    }
+
     if (g_attach_busy.exchange(true)) {
         toast(L"Already attaching");
         return;
@@ -1740,6 +1771,50 @@ void do_execute() {
         return;
     }
     const std::wstring nm = (g_cur >= 0 && g_cur < (int)g_docs.size()) ? g_docs[g_cur].name : L"script";
+
+    // Compile-check first. Report truthfully whether the source even
+    // parses before we talk to any backend.
+    {
+        const std::string diag = vt::xeno::compilable(raw);
+        if (diag != "success") {
+            notify(L"Runtime", L"Compile error — " +
+                   std::wstring(diag.begin(), diag.end()));
+            VT_LOG(L"voidtrace: compile diagnostic for " + nm);
+            return;
+        }
+    }
+
+    // External backend. In the default (safe) build execute() returns 0
+    // and the state does not advance to "executed" — the UI reports
+    // "RequestSent (no live runtime)". In the opt-in live build
+    // execute() returns the per-client dispatch count; even then the
+    // UI must wait for a RuntimeAcknowledged signal from the bootstrap
+    // before showing "Executed". That signal is not wired yet, so this
+    // code labels the result "RequestSent" rather than "Executed".
+    if (vt::xeno::is_running()) {
+        const auto rows = vt::xeno::clients();
+        if (!rows.empty()) {
+            const std::size_t sent =
+                vt::xeno::execute(expand_loadstring_http(raw));
+            if (sent > 0) {
+                notify(L"Runtime",
+                       L"RequestSent  " + nm + L"  →  " +
+                       std::to_wstring(sent) + L" target" +
+                       (sent == 1 ? L"" : L"s") +
+                       L" (awaiting ack)");
+                VT_LOG(L"voidtrace: request sent " + nm + L" →  " +
+                       std::to_wstring(sent) + L" targets");
+                return;
+            }
+            notify(L"Runtime",
+                   L"Compile OK — no live runtime linked in this build");
+            return;
+        }
+        notify(L"Runtime",
+               L"Compile OK — no target detected (open Roblox + Attach)");
+    }
+
+    // Fallback: internal manual-map backend via the named pipe.
     if (!g_rbx || !g_injected || g_mapped_pid != (g_rbx ? g_rbx->pid : 0) || !g_mod_ready) {
         g_pending_exec = expand_loadstring_http(raw);
         notify(L"Runtime", L"Queued  " + nm + L" — attaching");

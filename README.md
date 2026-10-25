@@ -37,6 +37,28 @@ print("hello", identifyexecutor())
 
 If you see `Lua API incomplete` or `no lua_State`, offsets are stale. Dump `RobloxPlayerBeta.exe` and fill `config/offsets.json`.
 
+## External mode (Xeno-style)
+
+A second execution backend ported from
+[`tyronetheqt/Xeno`](https://github.com/tyronetheqt/Xeno) now lives at
+`src/xeno/`. It does **not** inject a DLL — it drives Roblox entirely
+through cross-process memory writes against a `ModuleScript`'s bytecode
+slot (the Incognito method). Full architecture, offsets, and the
+one-time vcxproj + vcpkg wiring are documented in `src/xeno/README.md`.
+
+Public API:
+
+```cpp
+#include "xeno/XenoMode.h"
+vt::xeno::start();
+vt::xeno::execute(source);     // broadcast
+vt::xeno::clients();           // UI list
+```
+
+Toggle **External Mode** in the host to route Execute through this
+backend instead of the manual-map DLL. Same detection posture as the
+upstream — alt-only.
+
 ## Hyperion (Byfron)
 
 LoadLibrary + `CreateRemoteThread` and a usermode manual map are **detected** on the live client. This base does not include a hypervisor, a vulnerable driver, or a signed mapper. Treat it as a development executor: it will work on unprotected/test setups and will get you banned on production if you inject blindly.
