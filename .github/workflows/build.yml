@@ -40,8 +40,6 @@ jobs:
 
       - name: Build Release x64
         shell: pwsh
-        env:
-          VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
         run: |
           msbuild "VoidTrace executor roblox.slnx" `
             /p:Configuration=Release `
