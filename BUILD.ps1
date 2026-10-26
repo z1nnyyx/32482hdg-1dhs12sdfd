@@ -10,7 +10,9 @@
 #      command line (bypasses every VS UI cache).
 #   4. Prints the path to VoidTrace.exe when done.
 
-$ErrorActionPreference = "Stop"
+# Don't let PowerShell treat git's stderr status chatter as an exception.
+$ErrorActionPreference = "Continue"
+$PSNativeCommandUseErrorActionPreference = $false
 
 Set-Location $PSScriptRoot
 Write-Host ""
@@ -19,9 +21,9 @@ Write-Host ""
 
 # ----- 1. Pull latest ---------------------------------------------------
 Write-Host "[1/4] git pull..." -ForegroundColor Yellow
-git fetch origin claude/laughing-hypatia-mnje1j 2>&1 | Out-Host
-git checkout claude/laughing-hypatia-mnje1j 2>&1 | Out-Host
-git pull --rebase origin claude/laughing-hypatia-mnje1j 2>&1 | Out-Host
+cmd /c "git fetch origin claude/laughing-hypatia-mnje1j 2>&1"
+cmd /c "git checkout claude/laughing-hypatia-mnje1j 2>&1"
+cmd /c "git pull --rebase origin claude/laughing-hypatia-mnje1j 2>&1"
 
 # ----- 2. Wipe build output --------------------------------------------
 Write-Host ""
@@ -34,7 +36,7 @@ Write-Host ""
 Write-Host "[3/4] Luau sources..." -ForegroundColor Yellow
 if (-not (Test-Path "external\luau\Compiler\src")) {
     Remove-Item -Recurse -Force external -ErrorAction SilentlyContinue
-    git clone --depth 1 https://github.com/luau-lang/luau external\luau 2>&1 | Out-Host
+    cmd /c "git clone --depth 1 https://github.com/luau-lang/luau external\luau 2>&1"
     Write-Host "  cloned"
 } else {
     Write-Host "  already present"
