@@ -2,7 +2,7 @@
 #include <filesystem>
 #include <fstream>
 
-#define CPPHTTPLIB_OPENSSL_SUPPORT
+// Localhost-only bridge; no HTTPS needed → skip openssl dep.
 #include "server/httplib.h"
 using namespace httplib;
 

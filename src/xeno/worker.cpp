@@ -7,6 +7,9 @@
 #include <fstream>
 #include <mutex>
 
+// Inline the xxhash implementation into this TU so no .c is needed.
+#define XXH_STATIC_LINKING_ONLY
+#define XXH_IMPLEMENTATION
 #include <xxhash.h>
 #include <zstd.h>
 
@@ -458,11 +461,39 @@ std::vector<DWORD> GetProcessIDsByName(const std::wstring_view processName) {
 
 std::uintptr_t GetRV(HANDLE handle)
 {
+    // Standalone Roblox puts logs in %LOCALAPPDATA%\Roblox\logs.
+    // UWP Store Roblox puts them inside its sandboxed package folder:
+    //   %LOCALAPPDATA%\Packages\ROBLOXCorporation.RobloxGDK_*\LocalCache\Roaming\Roblox\logs
+    // Scan both; take whichever has recent *.log files.
     std::filesystem::path localAppData = std::filesystem::temp_directory_path().parent_path().parent_path();
-    std::filesystem::path logs = localAppData / "Roblox" / "logs";
 
-    if (!std::filesystem::is_directory(logs)) {
-        std::cerr << "[!] Roblox logs directory not found\n";
+    std::vector<std::filesystem::path> candidate_log_dirs;
+    candidate_log_dirs.push_back(localAppData / "Roblox" / "logs");
+
+    const std::filesystem::path pkgRoot = localAppData / "Packages";
+    if (std::filesystem::is_directory(pkgRoot)) {
+        std::error_code ec;
+        for (const auto& ent : std::filesystem::directory_iterator(pkgRoot, ec)) {
+            const auto name = ent.path().filename().string();
+            if (name.find("ROBLOXCorporation") == std::string::npos)
+                continue;
+            // Try all three LocalCache subpaths Roblox UWP has used.
+            candidate_log_dirs.push_back(ent.path() / "LocalCache" / "Roaming" / "Roblox" / "logs");
+            candidate_log_dirs.push_back(ent.path() / "LocalCache" / "Local" / "Roblox" / "logs");
+            candidate_log_dirs.push_back(ent.path() / "LocalState" / "Roblox" / "logs");
+        }
+    }
+
+    std::filesystem::path logs;
+    for (const auto& d : candidate_log_dirs) {
+        if (std::filesystem::is_directory(d)) {
+            logs = d;
+            std::cout << "[+] Using Roblox logs: " << d << "\n";
+            break;
+        }
+    }
+    if (logs.empty()) {
+        std::cerr << "[!] Roblox logs directory not found in any known path\n";
         return 0;
     }
 
