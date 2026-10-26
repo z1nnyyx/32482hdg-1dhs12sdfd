@@ -190,6 +190,13 @@ if exist "$(OutDir)libcrypto-3-x64.dll" del /F /Q "$(OutDir)libcrypto-3-x64.dll"
     <ClCompile Include="..\external\luau\Compiler\src\TableShape.cpp" />
     <ClCompile Include="..\external\luau\Compiler\src\Types.cpp" />
     <ClCompile Include="..\external\luau\Compiler\src\ValueTracking.cpp" />
+    <ClCompile Include="..\src\xeno\XenoMode.cpp" />
+    <ClCompile Include="..\src\xeno\Xeno.cpp" />
+    <ClCompile Include="..\src\xeno\worker.cpp" />
+    <ClCompile Include="..\src\xeno\server.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\include\utils\ntdll.cpp" />
+    <ClCompile Include="..\src\mock\MockBackend.cpp" />
+    <ClCompile Include="..\src\sandbox\LuauSandbox.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\exe\App.h" />

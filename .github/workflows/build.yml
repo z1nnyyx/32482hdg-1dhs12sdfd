@@ -1,0 +1,86 @@
+name: build-voidtrace
+
+on:
+  push:
+    branches:
+      - claude/laughing-hypatia-mnje1j
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write   # for release upload
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch Luau sources
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/luau-lang/luau external/luau
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: '68d349964cb4e8da561fd849d9491e6ba11c5681'
+
+      - name: Install native deps
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_ROOT\vcpkg" install openssl:x64-windows-static zstd:x64-windows-static xxhash:x64-windows-static
+          & "$env:VCPKG_ROOT\vcpkg" integrate install
+
+      - name: Build Release x64
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
+        run: |
+          msbuild "VoidTrace executor roblox.slnx" `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:PlatformToolset=v143 `
+            /p:WindowsTargetPlatformVersion=10.0 `
+            /p:VcpkgEnableManifest=true `
+            /p:VcpkgTriplet=x64-windows-static `
+            /m `
+            /v:minimal
+
+      - name: Locate output
+        id: locate
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse -Filter VoidTrace.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "VoidTrace.exe not found after build"; exit 1 }
+          Write-Host "Found: $($exe.FullName)"
+          "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoidTrace-x64
+          path: ${{ steps.locate.outputs.exe_path }}
+          if-no-files-found: error
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/claude/laughing-hypatia-mnje1j' || github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          body: |
+            Automated build of VoidTrace.exe from commit ${{ github.sha }}.
+
+            Download **VoidTrace.exe** below. Run as administrator.
+          files: ${{ steps.locate.outputs.exe_path }}
+          prerelease: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
