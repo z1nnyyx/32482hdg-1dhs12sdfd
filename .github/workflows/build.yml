@@ -1,85 +1,55 @@
-name: build-voidtrace
+name: build
 
 on:
   push:
-    branches:
-      - claude/laughing-hypatia-mnje1j
-      - main
+    branches: [claude/laughing-hypatia-mnje1j, main]
   workflow_dispatch:
 
 permissions:
-  contents: write   # for release upload
+  contents: write
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
     timeout-minutes: 60
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Fetch Luau sources
+      - name: Fetch Luau
+        run: git clone --depth 1 https://github.com/luau-lang/luau external/luau
+        shell: pwsh
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Install vcpkg deps
         shell: pwsh
         run: |
-          git clone --depth 1 https://github.com/luau-lang/luau external/luau
+          git clone --depth 1 https://github.com/microsoft/vcpkg C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg install openssl:x64-windows-static zstd:x64-windows-static xxhash:x64-windows-static
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+      - name: Build
+        shell: pwsh
+        run: |
+          msbuild "VoidTrace executor roblox.slnx" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:VcpkgEnableManifest=true /p:VcpkgRoot=C:\vcpkg /p:VcpkgTriplet=x64-windows-static /m /v:minimal
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
+      - name: Find exe
+        id: exe
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem -Recurse -Filter VoidTrace.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $f) { Write-Error "no exe produced"; exit 1 }
+          "path=$($f.FullName)" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
         with:
-          vcpkgGitCommitId: '68d349964cb4e8da561fd849d9491e6ba11c5681'
+          name: VoidTrace
+          path: ${{ steps.exe.outputs.path }}
 
-      - name: Install native deps
-        shell: pwsh
-        run: |
-          & "$env:VCPKG_ROOT\vcpkg" install openssl:x64-windows-static zstd:x64-windows-static xxhash:x64-windows-static
-          & "$env:VCPKG_ROOT\vcpkg" integrate install
-
-      - name: Build Release x64
-        shell: pwsh
-        run: |
-          msbuild "VoidTrace executor roblox.slnx" `
-            /p:Configuration=Release `
-            /p:Platform=x64 `
-            /p:PlatformToolset=v143 `
-            /p:WindowsTargetPlatformVersion=10.0 `
-            /p:VcpkgEnableManifest=true `
-            /p:VcpkgTriplet=x64-windows-static `
-            /m `
-            /v:minimal
-
-      - name: Locate output
-        id: locate
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Recurse -Filter VoidTrace.exe | Select-Object -First 1
-          if (-not $exe) { Write-Error "VoidTrace.exe not found after build"; exit 1 }
-          Write-Host "Found: $($exe.FullName)"
-          "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: VoidTrace-x64
-          path: ${{ steps.locate.outputs.exe_path }}
-          if-no-files-found: error
-
-      - name: Publish release
-        if: github.ref == 'refs/heads/claude/laughing-hypatia-mnje1j' || github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest build
-          body: |
-            Automated build of VoidTrace.exe from commit ${{ github.sha }}.
-
-            Download **VoidTrace.exe** below. Run as administrator.
-          files: ${{ steps.locate.outputs.exe_path }}
+          files: ${{ steps.exe.outputs.path }}
           prerelease: true
           make_latest: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
