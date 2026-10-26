@@ -1,16 +1,7 @@
 # VoidTrace fresh build script.
-# Usage: right-click -> Run with PowerShell. Or in a terminal:
+# Usage: in PowerShell from the repo folder:
 #   powershell -ExecutionPolicy Bypass -File BUILD.ps1
-#
-# What it does:
-#   1. Pulls the latest branch from GitHub (so you always get the
-#      newest source - nothing left stale).
-#   2. Wipes bin/ and obj/ (so Visual Studio can't cache an old build).
-#   3. Locates MSBuild via vswhere and does a full Rebuild from the
-#      command line (bypasses every VS UI cache).
-#   4. Prints the path to VoidTrace.exe when done.
 
-# Don't let PowerShell treat git's stderr status chatter as an exception.
 $ErrorActionPreference = "Continue"
 $PSNativeCommandUseErrorActionPreference = $false
 
@@ -31,13 +22,17 @@ Write-Host "[2/4] Clean..." -ForegroundColor Yellow
 Remove-Item -Recurse -Force bin, obj -ErrorAction SilentlyContinue
 Write-Host "  cleared"
 
-# ----- 3. Make sure Luau sources are present ---------------------------
+# ----- 3. Make sure zstd sources are present ---------------------------
+# The vcxproj compiles zstd from source via hardcoded vcpkg buildtree paths.
+# We satisfy that by cloning zstd 1.5.7 to the expected folder.
 Write-Host ""
-Write-Host "[3/4] Luau sources..." -ForegroundColor Yellow
-if (-not (Test-Path "external\luau\Compiler\src")) {
-    Remove-Item -Recurse -Force external -ErrorAction SilentlyContinue
-    cmd /c "git clone --depth 1 https://github.com/luau-lang/luau external\luau 2>&1"
-    Write-Host "  cloned"
+Write-Host "[3/4] zstd sources..." -ForegroundColor Yellow
+$zstdRoot = "vcpkg\buildtrees\zstd\src\v1.5.7-bb6cae2b2e.clean"
+if (-not (Test-Path "$zstdRoot\lib\common\error_private.h")) {
+    Remove-Item -Recurse -Force $zstdRoot -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path "vcpkg\buildtrees\zstd\src" | Out-Null
+    cmd /c "git clone --branch v1.5.7 --depth 1 https://github.com/facebook/zstd `"$zstdRoot`" 2>&1"
+    Write-Host "  cloned zstd 1.5.7"
 } else {
     Write-Host "  already present"
 }
@@ -48,17 +43,20 @@ Write-Host "[4/4] MSBuild Rebuild..." -ForegroundColor Yellow
 
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path $vswhere)) {
-    Write-Error "vswhere not found. Install Visual Studio 2022 with C++ workload."
+    Write-Host "vswhere not found. Install Visual Studio 2022 with C++ workload." -ForegroundColor Red
+    exit 1
 }
 
 $vsPath = & $vswhere -latest -requires Microsoft.Component.MSBuild -property installationPath
 if (-not $vsPath) {
-    Write-Error "No VS install with MSBuild found."
+    Write-Host "No VS install with MSBuild found." -ForegroundColor Red
+    exit 1
 }
 
 $msbuild = Join-Path $vsPath "MSBuild\Current\Bin\MSBuild.exe"
 if (-not (Test-Path $msbuild)) {
-    Write-Error "MSBuild.exe not found at $msbuild"
+    Write-Host "MSBuild.exe not found at $msbuild" -ForegroundColor Red
+    exit 1
 }
 
 Write-Host "  using $msbuild"
@@ -90,6 +88,6 @@ if ($exe) {
     Write-Host ""
     Write-Host "Right-click it, Run as administrator." -ForegroundColor White
 } else {
-    Write-Host "Build reported success but no VoidTrace.exe found. Odd - tell Claude." -ForegroundColor Yellow
+    Write-Host "Build reported success but no VoidTrace.exe found. Tell Claude." -ForegroundColor Yellow
 }
 Write-Host ""
