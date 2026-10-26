@@ -30,7 +30,7 @@
 #endif
 
 #if VT_LIVE_BACKEND_ENABLED
-#include "xeno/vendor/worker.hpp"
+#include "worker.hpp"  // resolved via src/xeno/vendor/include/ in vcxproj include dirs
 extern std::vector<std::shared_ptr<RBXClient>> Clients;
 extern std::mutex clientsMtx;
 extern "C" {
