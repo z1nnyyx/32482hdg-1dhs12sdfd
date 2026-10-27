@@ -585,49 +585,13 @@ static std::string compress(const std::string_view bytecode)
     return std::string(buffer.data(), size);
 }
 
-std::string decompress(const std::string_view compressed) {
-    const uint8_t bytecodeSignature[4] = { 'R', 'S', 'B', '1' };
-    const int bytecodeHashMultiplier = 41;
-    const int bytecodeHashSeed = 42;
-
-    if (compressed.size() < 8)
-        return "Compressed data too short";
-
-    std::vector<uint8_t> compressedData(compressed.begin(), compressed.end());
-    std::vector<uint8_t> headerBuffer(4);
-
-    for (size_t i = 0; i < 4; ++i) {
-        headerBuffer[i] = compressedData[i] ^ bytecodeSignature[i];
-        headerBuffer[i] = (headerBuffer[i] - i * bytecodeHashMultiplier) % 256;
-    }
-
-    for (size_t i = 0; i < compressedData.size(); ++i) {
-        compressedData[i] ^= (headerBuffer[i % 4] + i * bytecodeHashMultiplier) % 256;
-    }
-
-    uint32_t hashValue = 0;
-    for (size_t i = 0; i < 4; ++i) {
-        hashValue |= headerBuffer[i] << (i * 8);
-    }
-
-    uint32_t rehash = XXH32(compressedData.data(), compressedData.size(), bytecodeHashSeed);
-    if (rehash != hashValue)
-        return "Hash mismatch during decompression";
-
-    uint32_t decompressedSize = 0;
-    for (size_t i = 4; i < 8; ++i) {
-        decompressedSize |= compressedData[i] << ((i - 4) * 8);
-    }
-
-    compressedData = std::vector<uint8_t>(compressedData.begin() + 8, compressedData.end());
-    std::vector<uint8_t> decompressed(decompressedSize);
-
-    size_t const actualDecompressedSize = ZSTD_decompress(decompressed.data(), decompressedSize, compressedData.data(), compressedData.size());
-    if (ZSTD_isError(actualDecompressedSize))
-        return "ZSTD decompression error: " + std::string(ZSTD_getErrorName(actualDecompressedSize));
-
-    decompressed.resize(actualDecompressedSize);
-    return std::string(decompressed.begin(), decompressed.end());
+std::string decompress(const std::string_view /*compressed*/) {
+    // VoidTrace's vcxproj links only zstd's compress sources (needed to
+    // write bytecode INTO Roblox). The decompress path exists only for
+    // reading bytecode OUT of a hijacked ModuleScript via GetBytecode(),
+    // which is not on the Execute hot path. Stubbed to keep the linker
+    // happy without pulling in zstd_decompress.c + huf_decompress.c.
+    return "decompression disabled in this build";
 }
 
 std::string compilable(const std::string& source, bool returnBytecode) {
