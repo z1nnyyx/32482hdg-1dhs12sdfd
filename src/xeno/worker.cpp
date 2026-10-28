@@ -487,7 +487,26 @@ std::vector<DWORD> GetProcessIDsByName(const std::wstring_view processName) {
     return processIDs;
 }
 
+static std::uintptr_t GetRV_impl(HANDLE handle);
+
 std::uintptr_t GetRV(HANDLE handle)
+{
+    // Outer try/catch: GetRV touches the filesystem on every path and
+    // std::filesystem throws filesystem_error on race conditions, locked
+    // files, permission failures, etc. An uncaught throw in a detached
+    // thread would terminate the host (seen as the VEH crash dialog).
+    try {
+        return GetRV_impl(handle);
+    } catch (const std::exception& e) {
+        std::cerr << "[xeno/trace] GetRV threw: " << e.what() << "\n";
+        return 0;
+    } catch (...) {
+        std::cerr << "[xeno/trace] GetRV threw unknown\n";
+        return 0;
+    }
+}
+
+static std::uintptr_t GetRV_impl(HANDLE handle)
 {
     // Standalone Roblox puts logs in %LOCALAPPDATA%\Roblox\logs.
     // UWP Store Roblox puts them inside its sandboxed package folder:
@@ -530,10 +549,19 @@ std::uintptr_t GetRV(HANDLE handle)
         tries -= 1;
         std::vector<std::filesystem::path> logFiles;
 
-        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(logs)) {
-            std::filesystem::path path = entry.path();
-            if (entry.is_regular_file() && path.extension() == ".log")
-                logFiles.push_back(path);
+        // Use error_code variants everywhere — a file vanishing mid-scan
+        // (or a UWP permission error on jamie's PC) must not throw.
+        std::error_code ec;
+        for (auto it = std::filesystem::directory_iterator(logs, ec);
+             !ec && it != std::filesystem::directory_iterator();
+             it.increment(ec))
+        {
+            std::error_code ec2;
+            if (it->is_regular_file(ec2) && !ec2 &&
+                it->path().extension() == ".log")
+            {
+                logFiles.push_back(it->path());
+            }
         }
 
         if (logFiles.empty()) {
@@ -542,14 +570,18 @@ std::uintptr_t GetRV(HANDLE handle)
         }
 
         std::sort(logFiles.begin(), logFiles.end(), [](const auto& x, const auto& y) {
-            return std::filesystem::last_write_time(x) > std::filesystem::last_write_time(y);
+            std::error_code ea, eb;
+            auto tx = std::filesystem::last_write_time(x, ea);
+            auto ty = std::filesystem::last_write_time(y, eb);
+            if (ea || eb) return false;
+            return tx > ty;
         });
 
         std::vector<std::filesystem::path> lockedFiles;
         for (const std::filesystem::path& logPath : logFiles) {
-            try {
-                std::filesystem::remove(logPath);
-            } catch (const std::filesystem::filesystem_error& e) {
+            std::error_code rem_ec;
+            if (!std::filesystem::remove(logPath, rem_ec) || rem_ec) {
+                // File is locked (= Roblox has it open = active log).
                 lockedFiles.push_back(logPath);
             }
         }
