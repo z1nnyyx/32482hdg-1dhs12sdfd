@@ -1701,6 +1701,43 @@ void attach_after_sync() {
     g_rpm.attach(g_rbx->pid, g_rbx->base, g_rbx->size);
     VT_LOG(L"Found Roblox  pid " + std::to_wstring(g_rbx->pid) +
            (g_rbx->path.empty() ? L"" : (L"  " + g_rbx->path)));
+
+    // Detect which Roblox install the user is on. Legacy (AppData\Local
+    // \Roblox\Versions\...) ships with Hyperion active and defeats our
+    // DataModel scanner; Store (Program Files\WindowsApps\
+    // ROBLOXCorporation.RobloxGDK...) does not. Give the user clear
+    // guidance so they know why execution is or isn't about to work.
+    {
+        const std::wstring& p = g_rbx->path;
+        const bool is_store = p.find(L"WindowsApps") != std::wstring::npos ||
+                              p.find(L"ROBLOXCorporation.RobloxGDK") != std::wstring::npos;
+        const bool is_legacy = p.find(L"AppData\\Local\\Roblox") != std::wstring::npos;
+
+        if (is_store) {
+            VT_LOG(L"Roblox install: Microsoft Store (no Hyperion) — "
+                   L"execution should work.");
+            notify(L"VoidTrace", L"Attached to Store Roblox — execution ready.");
+        } else if (is_legacy) {
+            VT_WARN(L"Roblox install: Legacy (AppData) — Hyperion is active. "
+                    L"DataModel scanner will likely fail. Switch to Store "
+                    L"Roblox for working execution.");
+            notify(L"Legacy Roblox detected",
+                   L"You're running Roblox from the website installer.\n"
+                   L"Execution will likely fail because Hyperion blocks our "
+                   L"memory scan.\n\n"
+                   L"To fix:\n"
+                   L"1. Close this Roblox window\n"
+                   L"2. Open Microsoft Store (Win key, type Store)\n"
+                   L"3. Search for Roblox and Install it\n"
+                   L"4. Launch Roblox from the Store app, then re-Attach.");
+            // Offer a one-click: open Microsoft Store search for Roblox.
+            ShellExecuteW(nullptr, L"open",
+                          L"ms-windows-store://search?query=Roblox",
+                          nullptr, nullptr, SW_SHOWNORMAL);
+        } else {
+            VT_LOG(L"Roblox install: unknown layout — path=" + p);
+        }
+    }
     g_attach_step = 4;
     // Do not map a module. PeekMessage IAT + KERNEL32 wait-IAT closed Roblox.
     // Execute is host-side corescript bytecode (Xeno-style). ManualMap stays compiled.
