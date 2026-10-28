@@ -1726,13 +1726,18 @@ void do_attach() {
         if (!rows.empty()) {
             set_progress(100, L"Attached");
             std::wstring who;
+            std::string who_utf8;
             for (const auto& r : rows) {
                 if (!who.empty()) who += L", ";
                 who += std::wstring(r.username.begin(), r.username.end());
+                if (!who_utf8.empty()) who_utf8 += ", ";
+                who_utf8 += r.username;
             }
             notify(L"Runtime", L"Attached · " + who);
             VT_LOG(L"voidtrace: attached — " +
                    std::to_wstring(rows.size()) + L" client(s)");
+            // In-game bottom-right chip
+            ext::Overlay::instance().set_status(true, who_utf8, "live");
             return;
         }
     }

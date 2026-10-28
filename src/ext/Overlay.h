@@ -28,6 +28,15 @@ public:
     uintptr_t script_job() { return world_.find_script_job(); }
     void set_lua_draw(std::string blob);
 
+    // In-game status chip (bottom-right of Roblox): shows VoidTrace,
+    // the attach state, and the hooked username when known.
+    void set_status(bool attached, std::string user, std::string backend) {
+        std::lock_guard lock(status_mtx_);
+        status_attached_ = attached;
+        status_user_ = std::move(user);
+        status_backend_ = std::move(backend);
+    }
+
 private:
     static LRESULT CALLBACK wndproc(HWND, UINT, WPARAM, LPARAM);
     void tick();
@@ -56,6 +65,12 @@ private:
     std::vector<Entity> ents_;
     std::mutex lua_mtx_;
     std::vector<DrawItem> lua_draw_;
+
+    // Status chip state — drawn bottom-right of Roblox window.
+    std::mutex status_mtx_;
+    bool        status_attached_ = false;
+    std::string status_user_;
+    std::string status_backend_;
 };
 
 } // namespace vt::ext
