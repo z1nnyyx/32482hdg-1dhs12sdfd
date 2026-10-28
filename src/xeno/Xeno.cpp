@@ -96,13 +96,14 @@ extern "C" {
     }
 
     __declspec(dllexport) void Initialize() {
-        /*
+        // Open a diagnostic console so [xeno/trace] std::cout lines are
+        // visible — otherwise all the step-by-step logging goes nowhere.
         FILE* conOut;
         AllocConsole();
-        SetConsoleTitleA("Xeno");
+        SetConsoleTitleA("VoidTrace :: Xeno backend trace");
         freopen_s(&conOut, "CONOUT$", "w", stdout);
         freopen_s(&conOut, "CONOUT$", "w", stderr);
-        */
+        std::cout << "[xeno/trace] Initialize begin\n";
         
         HMODULE ntdll = LoadLibraryA("ntdll.dll");
         if (!ntdll) {
