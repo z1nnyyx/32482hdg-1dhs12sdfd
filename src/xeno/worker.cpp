@@ -138,27 +138,27 @@ RBXClient::RBXClient(DWORD processID) :
     handle(OpenProcess(PROCESS_ALL_ACCESS, TRUE, processID)),
     PID(processID)
 {
-    std::cout << "[xeno/trace] RBXClient ctor pid=" << processID << "\n";
+    std::cout << "[voidtrace] RBXClient ctor pid=" << processID << "\n";
     if (handle == NULL) {
-        std::cerr << "[xeno/trace] step=OpenProcess FAILED err=" << GetLastError() << "\n";
+        std::cerr << "[voidtrace] step=OpenProcess FAILED err=" << GetLastError() << "\n";
         return;
     }
-    std::cout << "[xeno/trace] step=OpenProcess OK\n";
+    std::cout << "[voidtrace] step=OpenProcess OK\n";
 
     ClientDir = GetHandlePath(handle).parent_path();
     GUID = generateGUID();
     Version = ClientDir.filename().string();
-    std::cout << "[xeno/trace] step=version resolved: " << Version << "\n";
+    std::cout << "[voidtrace] step=version resolved: " << Version << "\n";
 
     // Working-set gate — wait up to 30 s then give up instead of
     // spinning forever on a UWP container that caps its working set.
     PROCESS_MEMORY_COUNTERS memory_counter;
     K32GetProcessMemoryInfo(handle, &memory_counter, sizeof(memory_counter));
-    std::cout << "[xeno/trace] step=workingset initial=" << memory_counter.WorkingSetSize << "\n";
+    std::cout << "[voidtrace] step=workingset initial=" << memory_counter.WorkingSetSize << "\n";
     int ws_tries = 0;
     while (memory_counter.WorkingSetSize < 150000000) {
         if (++ws_tries > 300) {
-            std::cout << "[xeno/trace] step=workingset TIMEOUT at "
+            std::cout << "[voidtrace] step=workingset TIMEOUT at "
                       << memory_counter.WorkingSetSize
                       << " bytes — proceeding anyway (UWP cap?)\n";
             break;
@@ -177,19 +177,19 @@ RBXClient::RBXClient(DWORD processID) :
         Sleep(1000);
     }
 
-    std::cout << "[xeno/trace] step=GetRV begin\n";
+    std::cout << "[voidtrace] step=GetRV begin\n";
     RenderView = GetRV(handle);
-    std::cout << "[xeno/trace] step=GetRV result=" << RenderView << "\n";
+    std::cout << "[voidtrace] step=GetRV result=" << RenderView << "\n";
     if (RenderView == 0) {
-        std::cerr << "[xeno/trace] FAIL — RenderView = 0. Log scan failed. "
+        std::cerr << "[voidtrace] FAIL — RenderView = 0. Log scan failed. "
                      "Either Roblox logs are missing or path/perm wrong.\n";
         return;
     }
 
     std::uintptr_t dataModelAddress = FetchDataModel();
-    std::cout << "[xeno/trace] step=FetchDataModel result=" << dataModelAddress << "\n";
+    std::cout << "[voidtrace] step=FetchDataModel result=" << dataModelAddress << "\n";
     if (dataModelAddress == 0) {
-        std::cerr << "[xeno/trace] FAIL — DataModel = 0\n";
+        std::cerr << "[voidtrace] FAIL — DataModel = 0\n";
         return;
     }
 
@@ -498,10 +498,10 @@ std::uintptr_t GetRV(HANDLE handle)
     try {
         return GetRV_impl(handle);
     } catch (const std::exception& e) {
-        std::cerr << "[xeno/trace] GetRV threw: " << e.what() << "\n";
+        std::cerr << "[voidtrace] GetRV threw: " << e.what() << "\n";
         return 0;
     } catch (...) {
-        std::cerr << "[xeno/trace] GetRV threw unknown\n";
+        std::cerr << "[voidtrace] GetRV threw unknown\n";
         return 0;
     }
 }

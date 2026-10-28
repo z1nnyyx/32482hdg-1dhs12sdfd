@@ -904,8 +904,8 @@ static void do_deferred_init() {
     // External execution backend (Xeno-style). Non-fatal if it fails to
     // bind the httplib port — do_execute() falls back to the internal
     // manual-map DLL path automatically.
-    try { vt::xeno::start(); VT_LOG(L"xeno: external backend online"); }
-    catch (...) { VT_WARN(L"xeno: start() threw — external mode disabled"); }
+    try { vt::xeno::start(); VT_LOG(L"voidtrace: external backend online"); }
+    catch (...) { VT_WARN(L"voidtrace: start() threw — external mode disabled"); }
     auto& cfg = Config::instance().get();
     cfg.auto_attach = false;
     g_auto_attach = false;

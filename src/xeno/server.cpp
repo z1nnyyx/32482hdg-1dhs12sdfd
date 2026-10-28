@@ -720,10 +720,10 @@ void setup_connection()
 	// thread exception never terminates the whole VoidTrace.exe.
 	try { setup_connection_impl(); }
 	catch (const std::exception& e) {
-		std::cerr << "[xeno/server] setup_connection threw: " << e.what() << "\n";
+		std::cerr << "[voidtrace/bridge] setup_connection threw: " << e.what() << "\n";
 	}
 	catch (...) {
-		std::cerr << "[xeno/server] setup_connection threw unknown\n";
+		std::cerr << "[voidtrace/bridge] setup_connection threw unknown\n";
 	}
 }
 static void setup_connection_impl()
@@ -740,7 +740,7 @@ static void setup_connection_impl()
 	svr.set_exception_handler([](const auto&, auto& res, std::exception_ptr ep) {
 		try { if (ep) std::rethrow_exception(ep); }
 		catch (const std::exception& e) {
-			std::cerr << "[xeno/server] handler threw: " << e.what() << "\n";
+			std::cerr << "[voidtrace/bridge] handler threw: " << e.what() << "\n";
 			res.status = 500;
 			res.set_content(std::string("{\"error\":\"handler threw\"}"), "application/json");
 		}

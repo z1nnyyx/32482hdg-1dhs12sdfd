@@ -26,12 +26,12 @@ static void newClient(DWORD pid) {
             initializingClients.erase(pid);
         }
     } catch (const std::exception& e) {
-        std::cerr << "[xeno] client " << pid << " init threw: " << e.what() << "\n";
+        std::cerr << "[voidtrace] client " << pid << " init threw: " << e.what() << "\n";
         std::lock_guard<std::mutex> lock(clientsMtx);
         initializingClients.erase(pid);
         closedClients.insert(pid); // don't retry — same crash will repeat
     } catch (...) {
-        std::cerr << "[xeno] client " << pid << " init threw unknown\n";
+        std::cerr << "[voidtrace] client " << pid << " init threw unknown\n";
         std::lock_guard<std::mutex> lock(clientsMtx);
         initializingClients.erase(pid);
         closedClients.insert(pid);
@@ -71,9 +71,9 @@ static void init() {
             }
         }
         } catch (const std::exception& e) {
-            std::cerr << "[xeno] init tick threw: " << e.what() << "\n";
+            std::cerr << "[voidtrace] init tick threw: " << e.what() << "\n";
         } catch (...) {
-            std::cerr << "[xeno] init tick threw unknown\n";
+            std::cerr << "[voidtrace] init tick threw unknown\n";
         }
         Sleep(250);
     }
@@ -96,14 +96,14 @@ extern "C" {
     }
 
     __declspec(dllexport) void Initialize() {
-        // Open a diagnostic console so [xeno/trace] std::cout lines are
+        // Open a diagnostic console so [voidtrace] std::cout lines are
         // visible — otherwise all the step-by-step logging goes nowhere.
         FILE* conOut;
         AllocConsole();
-        SetConsoleTitleA("VoidTrace :: Xeno backend trace");
+        SetConsoleTitleA("VoidTrace Diagnostics");
         freopen_s(&conOut, "CONOUT$", "w", stdout);
         freopen_s(&conOut, "CONOUT$", "w", stderr);
-        std::cout << "[xeno/trace] Initialize begin\n";
+        std::cout << "[voidtrace] Initialize begin\n";
         
         HMODULE ntdll = LoadLibraryA("ntdll.dll");
         if (!ntdll) {
