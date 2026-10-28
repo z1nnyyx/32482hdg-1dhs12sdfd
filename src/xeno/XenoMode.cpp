@@ -53,9 +53,17 @@ bool start() {
     bool first = false;
     std::call_once(g_init_once, [&] {
         VT_LOG(L"voidtrace: live backend starting (opt-in build)");
-        Initialize();
-        g_running.store(true);
-        first = true;
+        try {
+            Initialize();
+            g_running.store(true);
+            first = true;
+        } catch (const std::exception& e) {
+            VT_WARN(L"voidtrace: Initialize threw — backend offline. msg=" +
+                    std::wstring(std::string(e.what()).begin(),
+                                 std::string(e.what()).end()));
+        } catch (...) {
+            VT_WARN(L"voidtrace: Initialize threw unknown — backend offline");
+        }
     });
     return g_running.load() && (first || true);
 #else
