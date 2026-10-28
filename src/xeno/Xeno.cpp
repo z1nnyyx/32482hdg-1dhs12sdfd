@@ -11,35 +11,40 @@ std::unordered_set<DWORD> closedClients;
 std::unordered_set<DWORD> initializingClients;
 
 static void newClient(DWORD pid) {
-    if (closedClients.find(pid) != closedClients.end()) {
-        return;
-    }
-    initializingClients.insert(pid);
-    std::shared_ptr<RBXClient> client = std::make_shared<RBXClient>(pid);
-    {
+    // Protect the host from any exception thrown deep inside the Xeno
+    // worker: offsets that no longer match the Roblox build cause
+    // out-of-range reads, which throw std::out_of_range/std::bad_alloc
+    // and would otherwise terminate the whole process via std::terminate.
+    try {
+        if (closedClients.find(pid) != closedClients.end())
+            return;
+        initializingClients.insert(pid);
+        std::shared_ptr<RBXClient> client = std::make_shared<RBXClient>(pid);
+        {
+            std::lock_guard<std::mutex> lock(clientsMtx);
+            Clients.push_back(std::move(client));
+            initializingClients.erase(pid);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[xeno] client " << pid << " init threw: " << e.what() << "\n";
         std::lock_guard<std::mutex> lock(clientsMtx);
-        Clients.push_back(std::move(client));
         initializingClients.erase(pid);
+        closedClients.insert(pid); // don't retry — same crash will repeat
+    } catch (...) {
+        std::cerr << "[xeno] client " << pid << " init threw unknown\n";
+        std::lock_guard<std::mutex> lock(clientsMtx);
+        initializingClients.erase(pid);
+        closedClients.insert(pid);
     }
 }
 
 static void init() {
-    DWORD CurrentPID = GetCurrentProcessId();
-    wchar_t path[MAX_PATH];
-
-    GetModuleFileNameW(0, path, MAX_PATH);
-
-    std::vector<DWORD> xenoPIDs = GetProcessIDsByName(wcsrchr(path, L'\\') + 1);
-
-    for (const DWORD& pid : xenoPIDs) { // Terminate existing Xeno processes
-        if (pid == CurrentPID)
-            continue;
-        HANDLE hXeno = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if (hXeno)
-            TerminateProcess(hXeno, 0);
-    }
+    // Upstream Xeno would terminate every other process named like
+    // itself here. VoidTrace runs standalone — removed, so launching a
+    // second VoidTrace.exe never kills the first.
 
     while (true) {
+        try {
         std::vector<DWORD> client_pids = GetProcessIDsByName(L"RobloxPlayerBeta.exe");
         std::vector<DWORD> shader_pids = GetProcessIDsByName(L"eurotrucks2.exe");
 
@@ -64,6 +69,11 @@ static void init() {
                     std::thread(newClient, pid).detach();
                 }
             }
+        }
+        } catch (const std::exception& e) {
+            std::cerr << "[xeno] init tick threw: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "[xeno] init tick threw unknown\n";
         }
         Sleep(250);
     }
