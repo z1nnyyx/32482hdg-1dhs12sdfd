@@ -1770,16 +1770,31 @@ void do_execute() {
             const std::size_t sent =
                 vt::xeno::execute(expand_loadstring_http(raw));
             if (sent > 0) {
-                notify(L"Runtime",
-                       L"Executed  " + nm + L"  →  " +
-                       std::to_wstring(sent) + L" client" +
-                       (sent == 1 ? L"" : L"s"));
-                VT_LOG(L"voidtrace: Execute " + nm + L" → " +
-                       std::to_wstring(sent) + L" clients");
+                // Build a client-list string so the UI shows WHO received it.
+                std::wstring who;
+                for (const auto& r : rows) {
+                    if (!who.empty()) who += L", ";
+                    who += std::wstring(r.username.begin(), r.username.end());
+                }
+                notify(L"Dispatched",
+                       L"Script sent to " + who +
+                       L"\nSize: " + std::to_wstring(raw.size()) + L" bytes" +
+                       L"\nIf nothing happened in Roblox, check Developer "
+                       L"Console (F9) for errors or confirm you're in a game.");
+                VT_LOG(L"voidtrace: Dispatched " + nm + L" ("
+                       + std::to_wstring(raw.size()) + L" bytes) -> "
+                       + std::to_wstring(sent) + L" client(s): " + who);
+                set_status(L"Dispatched to " + std::to_wstring(sent) + L" client(s)");
                 return;
             }
         } else {
-            notify(L"Runtime", L"Waiting for Roblox — open a game first");
+            notify(L"Not attached",
+                   L"VoidTrace is running but hasn't attached to Roblox yet.\n"
+                   L"1. Make sure Roblox is open (Store version)\n"
+                   L"2. You are in a game, not the home page\n"
+                   L"3. Wait 10-15 seconds after joining\n"
+                   L"4. Click Attach again");
+            set_status(L"Waiting for Roblox");
         }
     }
 
