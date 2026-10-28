@@ -1134,6 +1134,24 @@ void start_ext_esp() {
     const auto st = ov.stats();
     VT_LOG(L"overlay ESP on  " + std::wstring(st.note));
     notify(L"Runtime", L"ESP on the game window — not in F9. Lua hubs cannot run in-game.");
+
+    // Feed the xeno backend our already-resolved DataModel so it can
+    // skip its (now-broken) log-scrape path. Current Roblox builds no
+    // longer print the SurfaceController::initialize-view line GetRV
+    // depends on, so without this the Xeno RBXClient bails before
+    // writing any bytecode.
+    if (vt::xeno::is_running() && g_rbx) {
+        auto dm = ov.data_model();
+        if (dm != 0) {
+            const bool ok = vt::xeno::seed_client_with_dm(
+                static_cast<std::uint32_t>(g_rbx->pid),
+                static_cast<std::uintptr_t>(dm));
+            VT_LOG(L"voidtrace: seed via overlay DM=0x" + format_hex(dm) +
+                   (ok ? L" OK" : L" FAIL"));
+        } else {
+            VT_WARN(L"voidtrace: overlay has no DataModel yet — xeno attach deferred");
+        }
+    }
 }
 
 void try_corescript(const std::string& src, const std::wstring& nm) {

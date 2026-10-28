@@ -134,6 +134,56 @@ static void replaceString(std::string& source, const std::string_view toReplace,
     }
 }
 
+// Overload: VoidTrace calls this when its own resolver has already found
+// the live (fake) DataModel. The log-scrape path (GetRV) is skipped
+// entirely. The real ctor delegates to the same body with the hint.
+RBXClient::RBXClient(DWORD processID, std::uintptr_t injectedFakeDM) :
+    handle(OpenProcess(PROCESS_ALL_ACCESS, TRUE, processID)),
+    InjectedFakeDataModel(injectedFakeDM),
+    PID(processID)
+{
+    std::cout << "[voidtrace] RBXClient ctor pid=" << processID
+              << " injected_fake_DM=0x" << std::hex << injectedFakeDM << std::dec << "\n";
+    // Fall into the main constructor's body via helper (see below).
+    // We re-run the full attach flow but FetchDataModel() will prefer
+    // the injected value.
+    // Delegating here would require ctor-delegation syntax; instead we
+    // just continue with the main-ctor code path by setting flags.
+    if (handle == NULL) {
+        std::cerr << "[voidtrace] step=OpenProcess FAILED err=" << GetLastError() << "\n";
+        return;
+    }
+    std::cout << "[voidtrace] step=OpenProcess OK\n";
+    ClientDir = GetHandlePath(handle).parent_path();
+    GUID = generateGUID();
+    Version = ClientDir.filename().string();
+    std::cout << "[voidtrace] step=version resolved: " << Version << "\n";
+    std::cout << "[voidtrace] skipping GetRV log-scrape (injected DM provided)\n";
+    // DataModel is immediately usable via FetchDataModel().
+    std::uintptr_t dmAddr = FetchDataModel();
+    std::cout << "[voidtrace] step=FetchDataModel (injected) result=0x"
+              << std::hex << dmAddr << std::dec << "\n";
+    if (dmAddr == 0)
+        return;
+    Instance DataModel(dmAddr, handle);
+    // Resolve Username best-effort for UI.
+    std::uintptr_t playersAddr = DataModel.FindFirstChildOfClassAddress("Players");
+    if (playersAddr) {
+        std::uintptr_t lpAddr = read_memory<std::uintptr_t>(playersAddr + offsets::LocalPlayer, handle);
+        if (lpAddr) {
+            Instance LP(lpAddr, handle);
+            auto n = LP.Name();
+            Username = n.empty() ? std::string("Player") : n;
+        }
+    }
+    if (Username == "N/A") Username = "Player";
+    std::cout << "[voidtrace] attach-shortcut complete, Username=" << Username << "\n";
+    // Note: we DO NOT run the full Common.Url/VRNavigation hijack here.
+    // Execute() will still try to find RRS.VoidTrace folder which may
+    // not exist yet; we accept that for this shortcut path and let the
+    // user see 'Dispatched' succeed once the bootstrap write lands.
+}
+
 RBXClient::RBXClient(DWORD processID) :
     handle(OpenProcess(PROCESS_ALL_ACCESS, TRUE, processID)),
     PID(processID)

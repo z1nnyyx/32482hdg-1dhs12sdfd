@@ -234,6 +234,12 @@ class RBXClient {
 private:
     HANDLE handle;
     std::uintptr_t RenderView{};
+    // When VoidTrace's own OffsetSync has already resolved the live
+    // DataModel (fake DM) address, we skip the log-scrape path and
+    // use this directly. Current Roblox builds no longer print the
+    // SurfaceController::initialize-view line that GetRV relies on,
+    // so without this override the client bails before anything runs.
+    std::uintptr_t InjectedFakeDataModel{};
 public:
     std::string Username = "N/A";
     std::string Version = "";
@@ -245,6 +251,10 @@ public:
 
     RBXClient(DWORD processID);
 
+    // Alternate constructor used by VoidTrace to seed the DM address
+    // discovered via OffsetSync/World, bypassing GetRV's log scan.
+    RBXClient(DWORD processID, std::uintptr_t fakeDataModelAddr);
+
     inline bool isProcessAlive() const {
         DWORD exitCode;
         if (GetExitCodeProcess(handle, &exitCode)) {
@@ -254,9 +264,15 @@ public:
     }
 
     inline std::uintptr_t FetchDataModel() const {
-        std::uintptr_t fakeDataModel = read_memory<std::uintptr_t>(RenderView + 0x118, handle);
-        if (fakeDataModel == 0)
-            std::cerr << "Could not fetch datamodel, expect a crash\n";
+        // Priority: injected DM from VoidTrace's own resolver.
+        // Fallback: RenderView-derived path (log scrape).
+        std::uintptr_t fakeDataModel =
+            InjectedFakeDataModel ? InjectedFakeDataModel
+                                  : read_memory<std::uintptr_t>(RenderView + 0x118, handle);
+        if (fakeDataModel == 0) {
+            std::cerr << "[voidtrace] FetchDataModel: both injected and RV-derived DM are 0 — attach cannot continue\n";
+            return 0;
+        }
         return fakeDataModel + 0x190;
     }
 

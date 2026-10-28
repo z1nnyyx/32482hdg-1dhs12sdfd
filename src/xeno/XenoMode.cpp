@@ -84,6 +84,35 @@ bool is_running() {
     return g_running.load();
 }
 
+bool seed_client_with_dm(std::uint32_t pid, std::uintptr_t fake_dm) {
+#if VT_LIVE_BACKEND_ENABLED
+    if (!g_running.load() || pid == 0 || fake_dm == 0)
+        return false;
+    try {
+        std::lock_guard<std::mutex> lock(clientsMtx);
+        // Already seeded?
+        for (const auto& c : Clients) {
+            if (c && c->PID == pid)
+                return true;
+        }
+        auto client = std::make_shared<RBXClient>(static_cast<DWORD>(pid),
+                                                   fake_dm);
+        VT_LOG(L"voidtrace: seeded client pid=" + std::to_wstring(pid) +
+               L" DM=" + std::to_wstring(fake_dm));
+        Clients.push_back(std::move(client));
+        return true;
+    } catch (const std::exception& e) {
+        VT_WARN(L"voidtrace: seed_client_with_dm threw");
+        return false;
+    } catch (...) {
+        return false;
+    }
+#else
+    (void)pid; (void)fake_dm;
+    return false;
+#endif
+}
+
 std::vector<ClientRow> clients() {
     std::vector<ClientRow> out;
     if (!g_running.load())

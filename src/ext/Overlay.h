@@ -26,6 +26,7 @@ public:
     bool esp() const { return esp_; }
     WorldStats stats() const { return world_.stats(); }
     uintptr_t script_job() { return world_.find_script_job(); }
+    uintptr_t data_model() const { return world_.cached_data_model(); }
     void set_lua_draw(std::string blob);
 
     // In-game status chip (bottom-right of Roblox): shows VoidTrace,
