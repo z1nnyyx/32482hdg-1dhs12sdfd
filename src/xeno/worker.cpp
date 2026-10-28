@@ -216,18 +216,27 @@ RBXClient::RBXClient(DWORD processID) :
 
     std::unique_ptr<Instance> PatchScript = nullptr;
     {
-        auto Common = Modules->FindFirstChild("Common");
-        if (!Common) {
-            std::cerr << "[!] Modules->Common not found\n";
-            return;
+        // Roblox 0.745+ moved the "Url" ModuleScript from Modules.Common.Url
+        // to Modules.InGameMenu.Network.Url. Try the new path first,
+        // fall back to the legacy path for older builds.
+        auto InGameMenu = Modules->FindFirstChild("InGameMenu");
+        if (InGameMenu) {
+            auto Network = InGameMenu->FindFirstChild("Network");
+            if (Network)
+                PatchScript = Network->FindFirstChild("Url");
         }
-        PatchScript = Common->FindFirstChild("Url");
+        if (!PatchScript) {
+            auto Common = Modules->FindFirstChild("Common");
+            if (Common)
+                PatchScript = Common->FindFirstChild("Url");
+        }
     }
 
     if (!PatchScript) {
-        std::cerr << "[!] Patch Script was not found\n";
+        std::cerr << "[!] Patch Script 'Url' was not found in Modules.InGameMenu.Network or Modules.Common\n";
         return;
     }
+    std::cout << "[+] PatchScript resolved at " << PatchScript->Self() << "\n";
 
     std::string clientScript;
     {
