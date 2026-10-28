@@ -2768,6 +2768,23 @@ LRESULT CALLBACK wndproc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (wp == 2) {
             persist_tabs();
+            // Opportunistic xeno seeding: if the overlay has resolved
+            // the DataModel after the initial attach (e.g. the user
+            // just joined a game, or World retried past a Hyperion
+            // scrambled window), seed the xeno client now so Execute
+            // works without a manual re-attach.
+            if (vt::xeno::is_running() && g_rbx &&
+                vt::xeno::clients().empty())
+            {
+                auto dm = ext::Overlay::instance().data_model();
+                if (dm != 0) {
+                    const bool ok = vt::xeno::seed_client_with_dm(
+                        static_cast<std::uint32_t>(g_rbx->pid),
+                        static_cast<std::uintptr_t>(dm));
+                    VT_LOG(L"voidtrace: retry seed DM=" + format_hex(dm) +
+                           (ok ? L" OK" : L" FAIL"));
+                }
+            }
             return 0;
         }
         if (!g_init_done)
