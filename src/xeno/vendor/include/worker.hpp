@@ -279,6 +279,11 @@ public:
     void execute(const std::string& source) const;
     bool loadstring(const std::string& source, const std::string& script_name, const std::string& chunk_name) const;
 
+    // Run the full bootstrap hijack: write client.lua into CoreGui's Url
+    // ModuleScript and VRNavigation so the VoidTrace folder appears in
+    // RobloxReplicatedStorage. Must be called once after DataModel is live.
+    void performBootstrapHijack();
+
     void UnlockModule(const std::string_view objectval_name) const {
         std::uintptr_t scriptPtr = RBXClient::GetObjectValuePtr(objectval_name);
         if (scriptPtr == 0)

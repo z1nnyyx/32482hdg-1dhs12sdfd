@@ -142,13 +142,8 @@ RBXClient::RBXClient(DWORD processID, std::uintptr_t injectedFakeDM) :
     InjectedFakeDataModel(injectedFakeDM),
     PID(processID)
 {
-    std::cout << "[voidtrace] RBXClient ctor pid=" << processID
+    std::cout << "[voidtrace] RBXClient ctor (seeded) pid=" << processID
               << " injected_fake_DM=0x" << std::hex << injectedFakeDM << std::dec << "\n";
-    // Fall into the main constructor's body via helper (see below).
-    // We re-run the full attach flow but FetchDataModel() will prefer
-    // the injected value.
-    // Delegating here would require ctor-delegation syntax; instead we
-    // just continue with the main-ctor code path by setting flags.
     if (handle == NULL) {
         std::cerr << "[voidtrace] step=OpenProcess FAILED err=" << GetLastError() << "\n";
         return;
@@ -159,29 +154,11 @@ RBXClient::RBXClient(DWORD processID, std::uintptr_t injectedFakeDM) :
     Version = ClientDir.filename().string();
     std::cout << "[voidtrace] step=version resolved: " << Version << "\n";
     std::cout << "[voidtrace] skipping GetRV log-scrape (injected DM provided)\n";
-    // DataModel is immediately usable via FetchDataModel().
-    std::uintptr_t dmAddr = FetchDataModel();
-    std::cout << "[voidtrace] step=FetchDataModel (injected) result=0x"
-              << std::hex << dmAddr << std::dec << "\n";
-    if (dmAddr == 0)
-        return;
-    Instance DataModel(dmAddr, handle);
-    // Resolve Username best-effort for UI.
-    std::uintptr_t playersAddr = DataModel.FindFirstChildOfClassAddress("Players");
-    if (playersAddr) {
-        std::uintptr_t lpAddr = read_memory<std::uintptr_t>(playersAddr + offsets::LocalPlayer, handle);
-        if (lpAddr) {
-            Instance LP(lpAddr, handle);
-            auto n = LP.Name();
-            Username = n.empty() ? std::string("Player") : n;
-        }
-    }
-    if (Username == "N/A") Username = "Player";
-    std::cout << "[voidtrace] attach-shortcut complete, Username=" << Username << "\n";
-    // Note: we DO NOT run the full Common.Url/VRNavigation hijack here.
-    // Execute() will still try to find RRS.VoidTrace folder which may
-    // not exist yet; we accept that for this shortcut path and let the
-    // user see 'Dispatched' succeed once the bootstrap write lands.
+
+    // Run the full bootstrap hijack — this writes client.lua into the
+    // Url ModuleScript and VRNavigation so the VoidTrace folder appears
+    // in RobloxReplicatedStorage, which execute() depends on.
+    performBootstrapHijack();
 }
 
 RBXClient::RBXClient(DWORD processID) :
@@ -236,8 +213,17 @@ RBXClient::RBXClient(DWORD processID) :
         return;
     }
 
+    performBootstrapHijack();
+}
+
+// -----------------------------------------------------------------------
+// performBootstrapHijack — shared bootstrap that writes client.lua into
+// the Url ModuleScript and VRNavigation. Called by BOTH constructors.
+// -----------------------------------------------------------------------
+void RBXClient::performBootstrapHijack() {
     std::uintptr_t dataModelAddress = FetchDataModel();
-    std::cout << "[voidtrace] step=FetchDataModel result=" << dataModelAddress << "\n";
+    std::cout << "[voidtrace] bootstrap: FetchDataModel result=0x"
+              << std::hex << dataModelAddress << std::dec << "\n";
     if (dataModelAddress == 0) {
         std::cerr << "[voidtrace] FAIL — DataModel = 0\n";
         return;
@@ -245,27 +231,37 @@ RBXClient::RBXClient(DWORD processID) :
 
     Instance DataModel(dataModelAddress, handle);
 
-    std::uintptr_t LocalPlayerAddr = read_memory<std::uintptr_t>(DataModel.FindFirstChildOfClassAddress("Players") + offsets::LocalPlayer, handle);
+    std::uintptr_t playersAddr = DataModel.FindFirstChildOfClassAddress("Players");
+    if (playersAddr == 0) {
+        std::cerr << "[voidtrace] bootstrap: Players service not found\n";
+        return;
+    }
+    std::uintptr_t LocalPlayerAddr = read_memory<std::uintptr_t>(playersAddr + offsets::LocalPlayer, handle);
 
-    while (LocalPlayerAddr == 0) {
+    int lp_wait = 0;
+    while (LocalPlayerAddr == 0 && lp_wait++ < 200) {
         std::cout << "Waiting for LocalPlayer\n";
-        LocalPlayerAddr = read_memory<std::uintptr_t>(DataModel.FindFirstChildOfClassAddress("Players") + offsets::LocalPlayer, handle);
+        LocalPlayerAddr = read_memory<std::uintptr_t>(playersAddr + offsets::LocalPlayer, handle);
         Sleep(25);
     }
 
-    Instance LocalPlayer(LocalPlayerAddr, handle);
-    Username = LocalPlayer.Name();
-
-    while (Username == "Player") {
-        std::cout << "Waiting for LocalPlayer to load\n";
+    if (LocalPlayerAddr) {
+        Instance LocalPlayer(LocalPlayerAddr, handle);
         Username = LocalPlayer.Name();
-        Sleep(25);
+
+        int name_wait = 0;
+        while (Username == "Player" && name_wait++ < 200) {
+            std::cout << "Waiting for LocalPlayer to load\n";
+            Username = LocalPlayer.Name();
+            Sleep(25);
+        }
     }
 
-    if (Username == "")
+    if (Username.empty() || Username == "N/A")
         Username = "Unknown";
 
-    // Need to add checks else the process will crash, yes it sucks.
+    std::cout << "[voidtrace] bootstrap: Username=" << Username << "\n";
+
     auto CoreGui = DataModel.FindFirstChild("CoreGui");
     if (!CoreGui) {
         std::cerr << "[!] Game->CoreGui not found\n";
@@ -285,9 +281,6 @@ RBXClient::RBXClient(DWORD processID) :
 
     std::unique_ptr<Instance> PatchScript = nullptr;
     {
-        // Roblox 0.745+ moved the "Url" ModuleScript from Modules.Common.Url
-        // to Modules.InGameMenu.Network.Url. Try the new path first,
-        // fall back to the legacy path for older builds.
         auto InGameMenu = Modules->FindFirstChild("InGameMenu");
         if (InGameMenu) {
             auto Network = InGameMenu->FindFirstChild("Network");
@@ -305,7 +298,7 @@ RBXClient::RBXClient(DWORD processID) :
         std::cerr << "[!] Patch Script 'Url' was not found in Modules.InGameMenu.Network or Modules.Common\n";
         return;
     }
-    std::cout << "[+] PatchScript resolved at " << PatchScript->Self() << "\n";
+    std::cout << "[+] PatchScript resolved at 0x" << std::hex << PatchScript->Self() << std::dec << "\n";
 
     std::string clientScript;
     {
@@ -322,7 +315,7 @@ RBXClient::RBXClient(DWORD processID) :
 
         HGLOBAL data = LoadResource(module, resource);
         if (!data) {
-            std::cerr << "[!] Could not get the could load resource\n";
+            std::cerr << "[!] Could not load resource\n";
             return;
         }
 
@@ -337,17 +330,20 @@ RBXClient::RBXClient(DWORD processID) :
 
     const std::string PatchScriptSource = "--!native\n--!optimize 1\n--!nonstrict\nlocal a={}local b=game:GetService(\"ContentProvider\")local function c(d)local e,f=d:find(\"%.\")local g=d:sub(f+1)if g:sub(-1)~=\"/\"then g=g..\"/\"end;return g end;local d=b.BaseUrl;local g=c(d)local h=string.format(\"https://games.%s\",g)local i=string.format(\"https://apis.rcs.%s\",g)local j=string.format(\"https://apis.%s\",g)local k=string.format(\"https://accountsettings.%s\",g)local l=string.format(\"https://gameinternationalization.%s\",g)local m=string.format(\"https://locale.%s\",g)local n=string.format(\"https://users.%s\",g)local o={GAME_URL=h,RCS_URL=i,APIS_URL=j,ACCOUNT_SETTINGS_URL=k,GAME_INTERNATIONALIZATION_URL=l,LOCALE_URL=m,ROLES_URL=n}setmetatable(a,{__newindex=function(p,q,r)end,__index=function(p,r)return o[r]end})return a";
 
-    if (DataModel.Name() == "LuaApp") { // In home page
+    if (DataModel.Name() == "LuaApp") {
+        std::cout << "[voidtrace] bootstrap: LuaApp (home page) — writing PatchScript only\n";
         PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource));
         return;
     }
 
-    // In-game, hooking a module that has custom bytecode we are writing.
-
     auto RobloxReplicatedStorage = DataModel.FindFirstChildOfClass("RobloxReplicatedStorage");
+    if (!RobloxReplicatedStorage) {
+        std::cerr << "[!] RobloxReplicatedStorage not found\n";
+        return;
+    }
+
     if (RobloxReplicatedStorage->FindFirstChild("VoidTrace")) {
-        std::cerr << "[!] Client '" << Username << "' is already attached\n";
-        // When player serverhops the GUID is going to be replaced with the new one. This fixes the communication with the bridge
+        std::cout << "[voidtrace] bootstrap: VoidTrace folder already exists — re-patching Url\n";
         PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource));
         return;
     }
@@ -368,10 +364,10 @@ RBXClient::RBXClient(DWORD processID) :
         return;
     }
 
-    if (!RobloxGui->FindFirstChild("DropDownFullscreenFrame")) { // If the player is joining the game
+    if (!RobloxGui->FindFirstChild("DropDownFullscreenFrame")) {
         std::cout << "Waiting for " + Username + " to join the game\n";
         RobloxGui->WaitForChildAddress("DropDownFullscreenFrame");
-        if (DataModel.Name() == "App") { // In case the player leaves the join page
+        if (DataModel.Name() == "App") {
             PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource));
             return;
         }
@@ -409,59 +405,83 @@ RBXClient::RBXClient(DWORD processID) :
         return;
     }
 
+    std::cout << "[voidtrace] bootstrap: writing bytecode to VRNavigation + Url\n";
+
     VRNavigation->UnlockModule();
     write_memory<std::uintptr_t>(PlayerListManager->Self() + offsets::This, VRNavigation->Self(), handle);
 
-    VRNavigation->SetBytecode(Compile("script.Parent=nil;coroutine.wrap(function(...)" + clientScript + "\nend)();while wait(9e9) do wait(9e9);end"), true); // Need to add a while loop otherwise the script will return and stop the thread
-    PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource)); // For later use (when player leaves game/teleports)
+    VRNavigation->SetBytecode(Compile("script.Parent=nil;coroutine.wrap(function(...)" + clientScript + "\nend)();while wait(9e9) do wait(9e9);end"), true);
+    PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource));
 
-    HWND previousHWND = GetForegroundWindow();
+    HWND clientHWND = GetHWNDFromPID(GetProcessId(handle));
+    if (clientHWND) {
+        HWND previousHWND = GetForegroundWindow();
 
-    while (GetForegroundWindow() != clientHWND) {
-        SetForegroundWindow(clientHWND);
-        Sleep(5);
+        int focus_tries = 0;
+        while (GetForegroundWindow() != clientHWND && focus_tries++ < 100) {
+            SetForegroundWindow(clientHWND);
+            Sleep(5);
+        }
+
+        keybd_event(VK_ESCAPE, MapVirtualKey(VK_ESCAPE, 0), KEYEVENTF_SCANCODE, 0);
+        keybd_event(VK_ESCAPE, MapVirtualKey(VK_ESCAPE, 0), KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, 0);
+
+        Sleep(100);
+
+        if (previousHWND != nullptr)
+            SetForegroundWindow(previousHWND);
+
+        Sleep(800);
+    } else {
+        std::cerr << "[voidtrace] bootstrap: no HWND — skipping ESC keypress\n";
     }
-
-    keybd_event(VK_ESCAPE, MapVirtualKey(VK_ESCAPE, 0), KEYEVENTF_SCANCODE, 0);
-    keybd_event(VK_ESCAPE, MapVirtualKey(VK_ESCAPE, 0), KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, 0);
-
-    Sleep(100);
-
-    if (previousHWND != nullptr)
-        SetForegroundWindow(previousHWND);
-
-    Sleep(800);
 
     write_memory<std::uintptr_t>(PlayerListManager->Self() + offsets::This, PlayerListManager->Self(), handle);
 
-    if (Username == "Unknown") { // Atleast the username dosen't have to be "Unknown" and we can try to change that
+    if (Username == "Unknown") {
         std::uintptr_t newLocalPlayerAddr = read_memory<std::uintptr_t>(DataModel.FindFirstChildOfClassAddress("Players") + offsets::LocalPlayer, handle);
-        Instance newLocalPlayer = Instance(newLocalPlayerAddr, handle);
-        Username = newLocalPlayer.Name();
-        if (Username == "")
-            Username = "Unknown";
+        if (newLocalPlayerAddr) {
+            Instance newLocalPlayer = Instance(newLocalPlayerAddr, handle);
+            Username = newLocalPlayer.Name();
+            if (Username.empty())
+                Username = "Unknown";
+        }
     }
+
+    std::cout << "[voidtrace] bootstrap: COMPLETE — VoidTrace folder should now appear in RRS\n";
 }
 
 void RBXClient::execute(const std::string& source) const {
     std::uintptr_t dataModel_Address = FetchDataModel();
+    if (dataModel_Address == 0) {
+        std::cerr << "[voidtrace] execute: DataModel = 0 — cannot dispatch\n";
+        return;
+    }
 
     Instance DataModel(dataModel_Address, handle);
     auto RobloxReplicatedStorage = DataModel.FindFirstChildOfClass("RobloxReplicatedStorage");
-    if (!RobloxReplicatedStorage)
+    if (!RobloxReplicatedStorage) {
+        std::cerr << "[voidtrace] execute: RobloxReplicatedStorage not found\n";
         return;
+    }
 
     auto xenoFolder = RobloxReplicatedStorage->FindFirstChild("VoidTrace");
-    if (!xenoFolder)
+    if (!xenoFolder) {
+        std::cerr << "[voidtrace] execute: VoidTrace folder not found in RRS — bootstrap may not have run\n";
         return;
+    }
 
     auto xenoModules = xenoFolder->FindFirstChild("Scripts");
-    if (!xenoModules)
+    if (!xenoModules) {
+        std::cerr << "[voidtrace] execute: VoidTrace/Scripts not found\n";
         return;
+    }
 
     auto xenoModule = xenoModules->FindFirstChildOfClass("ModuleScript");
-    if (!xenoModule)
+    if (!xenoModule) {
+        std::cerr << "[voidtrace] execute: no ModuleScript in VoidTrace/Scripts\n";
         return;
+    }
 
     xenoModule->SetBytecode(Compile("return {['v o i d t r a c e']=function(...)do local function s(i, v)getfenv(debug.info(0, 'f'))[i] = v;getfenv(debug.info(1, 'f'))[i] = v;end;for i,v in pairs(getfenv(debug.info(1,'f')))do s(i, v)end;setmetatable(getgenv(),{__newindex=function(t,i,v)rawset(t,i,v)s(i,v)end})end;" + source +"\nend}"), true);
     
