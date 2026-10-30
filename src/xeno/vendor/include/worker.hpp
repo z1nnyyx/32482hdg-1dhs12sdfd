@@ -234,11 +234,9 @@ class RBXClient {
 private:
     HANDLE handle;
     std::uintptr_t RenderView{};
-    // When VoidTrace's own OffsetSync has already resolved the live
-    // DataModel (fake DM) address, we skip the log-scrape path and
-    // use this directly. Current Roblox builds no longer print the
-    // SurfaceController::initialize-view line that GetRV relies on,
-    // so without this override the client bails before anything runs.
+    // Real DataModel address resolved by VoidTrace's OffsetSync/World
+    // scanner. When set, FetchDataModel() returns this directly,
+    // skipping the RenderView → fake-pointer → DM dereference chain.
     std::uintptr_t InjectedFakeDataModel{};
 public:
     std::string Username = "N/A";
@@ -264,13 +262,16 @@ public:
     }
 
     inline std::uintptr_t FetchDataModel() const {
-        // Priority: injected DM from VoidTrace's own resolver.
-        // Fallback: RenderView-derived path (log scrape).
+        // VoidTrace's scanner resolves the REAL DataModel address, so
+        // when an injected value is present, return it directly — no
+        // fake-to-real dereference needed.
+        if (InjectedFakeDataModel)
+            return InjectedFakeDataModel;
+        // Fallback: RenderView-derived path (original Xeno log-scrape).
         std::uintptr_t fakeDataModel =
-            InjectedFakeDataModel ? InjectedFakeDataModel
-                                  : read_memory<std::uintptr_t>(RenderView + 0x118, handle);
+            read_memory<std::uintptr_t>(RenderView + 0x118, handle);
         if (fakeDataModel == 0) {
-            std::cerr << "[voidtrace] FetchDataModel: both injected and RV-derived DM are 0 — attach cannot continue\n";
+            std::cerr << "[voidtrace] FetchDataModel: both injected and RV-derived DM are 0\n";
             return 0;
         }
         return fakeDataModel + 0x1B8;

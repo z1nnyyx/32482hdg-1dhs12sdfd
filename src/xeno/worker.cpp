@@ -196,10 +196,14 @@ RBXClient::RBXClient(DWORD processID) :
 
     HWND clientHWND = GetHWNDFromPID(GetProcessId(handle));
     if (!clientHWND) {
-        while (!clientHWND) {
+        int hwnd_tries = 0;
+        while (!clientHWND && hwnd_tries++ < 400) {
             clientHWND = GetHWNDFromPID(GetProcessId(handle));
-            std::cout << "Waiting for Client HWND\n";
             Sleep(25);
+        }
+        if (!clientHWND) {
+            std::cerr << "[voidtrace] FAIL — HWND not found after 10s\n";
+            return;
         }
         Sleep(1000);
     }
@@ -231,9 +235,40 @@ void RBXClient::performBootstrapHijack() {
 
     Instance DataModel(dataModelAddress, handle);
 
+    // Diagnostic: dump DataModel children so we can tell if offsets work
+    {
+        auto children = DataModel.GetChildrenAddresses();
+        std::cout << "[voidtrace] bootstrap: DataModel children count=" << children.size() << "\n";
+        int dump_n = 0;
+        for (auto addr : children) {
+            if (++dump_n > 12) break;
+            std::string n, cn;
+            try {
+                n = functions::ReadRobloxString(
+                    read_memory<std::uintptr_t>(addr + offsets::Name, handle), handle);
+            } catch (...) {}
+            try {
+                cn = functions::ReadRobloxString(
+                    read_memory<std::uintptr_t>(
+                        read_memory<std::uintptr_t>(addr + offsets::ClassDescriptor, handle)
+                        + offsets::ClassName, handle), handle);
+            } catch (...) {}
+            std::cout << "  child[" << dump_n << "] addr=0x" << std::hex << addr << std::dec
+                      << " name=\"" << n << "\" class=\"" << cn << "\"\n";
+        }
+        if (children.empty()) {
+            std::cerr << "[voidtrace] FAIL — DataModel has 0 children. "
+                         "Instance offsets (Children=0x" << std::hex << offsets::Children
+                      << " Name=0x" << offsets::Name << std::dec
+                      << ") are likely wrong for this Roblox build.\n";
+            return;
+        }
+    }
+
     std::uintptr_t playersAddr = DataModel.FindFirstChildOfClassAddress("Players");
     if (playersAddr == 0) {
-        std::cerr << "[voidtrace] bootstrap: Players service not found\n";
+        std::cerr << "[voidtrace] bootstrap: Players service not found "
+                     "(offsets may be wrong for this build)\n";
         return;
     }
     std::uintptr_t LocalPlayerAddr = read_memory<std::uintptr_t>(playersAddr + offsets::LocalPlayer, handle);

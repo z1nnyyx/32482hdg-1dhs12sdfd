@@ -11,10 +11,6 @@ std::unordered_set<DWORD> closedClients;
 std::unordered_set<DWORD> initializingClients;
 
 static void newClient(DWORD pid) {
-    // Protect the host from any exception thrown deep inside the Xeno
-    // worker: offsets that no longer match the Roblox build cause
-    // out-of-range reads, which throw std::out_of_range/std::bad_alloc
-    // and would otherwise terminate the whole process via std::terminate.
     try {
         if (closedClients.find(pid) != closedClients.end())
             return;
@@ -22,14 +18,29 @@ static void newClient(DWORD pid) {
         std::shared_ptr<RBXClient> client = std::make_shared<RBXClient>(pid);
         {
             std::lock_guard<std::mutex> lock(clientsMtx);
-            Clients.push_back(std::move(client));
+            // If VoidTrace's seed path already created a working client for
+            // this PID while we were constructing, don't push a duplicate.
+            bool already_has = false;
+            for (const auto& c : Clients) {
+                if (c && c->PID == pid) {
+                    already_has = true;
+                    break;
+                }
+            }
+            if (!already_has && client->FetchDataModel() != 0) {
+                Clients.push_back(std::move(client));
+            } else if (!already_has) {
+                std::cout << "[voidtrace] newClient pid=" << pid
+                          << " — log-scrape path got DM=0, not pushing "
+                             "(VoidTrace seed will handle it)\n";
+            }
             initializingClients.erase(pid);
         }
     } catch (const std::exception& e) {
         std::cerr << "[voidtrace] client " << pid << " init threw: " << e.what() << "\n";
         std::lock_guard<std::mutex> lock(clientsMtx);
         initializingClients.erase(pid);
-        closedClients.insert(pid); // don't retry — same crash will repeat
+        closedClients.insert(pid);
     } catch (...) {
         std::cerr << "[voidtrace] client " << pid << " init threw unknown\n";
         std::lock_guard<std::mutex> lock(clientsMtx);
@@ -46,8 +57,10 @@ static void init() {
     while (true) {
         try {
         std::vector<DWORD> client_pids = GetProcessIDsByName(L"RobloxPlayerBeta.exe");
+        // Store Roblox (UWP) runs as Windows10Universal.exe
+        auto store_pids = GetProcessIDsByName(L"Windows10Universal.exe");
+        client_pids.insert(client_pids.end(), store_pids.begin(), store_pids.end());
         std::vector<DWORD> shader_pids = GetProcessIDsByName(L"eurotrucks2.exe");
-
         client_pids.insert(client_pids.end(), shader_pids.begin(), shader_pids.end());
 
         std::unordered_set<DWORD> current_pids(client_pids.begin(), client_pids.end());
