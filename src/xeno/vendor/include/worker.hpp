@@ -17,27 +17,27 @@
 #include "utils/ntdll.h"
 
 namespace offsets {
-    // Instance
+    // Instance — updated for Roblox 2.745 / version-765338e04cf54fde
     constexpr std::uint64_t This = 0x8;
-    constexpr std::uint64_t Name = 0x50; // 0x48
-    constexpr std::uint64_t Children = 0x58; // 0x50
-    constexpr std::uint64_t Parent = 0x28; // 0x60
+    constexpr std::uint64_t Name = 0x78;
+    constexpr std::uint64_t Children = 0x80;
+    constexpr std::uint64_t Parent = 0x50;
 
     constexpr std::uint64_t ClassDescriptor = 0x18;
     constexpr std::uint64_t ClassName = 0x8;
 
     // Scripts
-    constexpr std::uint64_t ModuleScriptEmbedded = 0x160;
-    constexpr std::uint64_t IsCoreScript = 0x1a8;
+    constexpr std::uint64_t ModuleScriptEmbedded = 0x158;
+    constexpr std::uint64_t IsCoreScript = 0x6E0;
     constexpr std::uint64_t ModuleFlags = IsCoreScript - 0x4;
-    constexpr std::uint64_t LocalScriptEmbedded = 0x1c0;
+    constexpr std::uint64_t LocalScriptEmbedded = 0x1B0;
 
     constexpr std::uint64_t Bytecode = 0x10;
     constexpr std::uint64_t BytecodeSize = 0x20;
 
     // Other
-    constexpr std::uint64_t LocalPlayer = 0x110; // 0x100
-    constexpr std::uint64_t ObjectValue = 0xc0;
+    constexpr std::uint64_t LocalPlayer = 0x128;
+    constexpr std::uint64_t ObjectValue = 0xD8;
 }
 
 const std::string_view Xeno_Version = "1.1.2-voidtrace";
@@ -273,7 +273,7 @@ public:
             std::cerr << "[voidtrace] FetchDataModel: both injected and RV-derived DM are 0 — attach cannot continue\n";
             return 0;
         }
-        return fakeDataModel + 0x190;
+        return fakeDataModel + 0x1B8;
     }
 
     void execute(const std::string& source) const;

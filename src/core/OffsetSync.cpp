@@ -133,8 +133,8 @@ bool is_task_scheduler(ext::Memory& mem, uintptr_t ts) {
 bool is_datamodel(ext::Memory& mem, uintptr_t dm) {
     if (!looks_heap(dm))
         return false;
-    const uintptr_t child[] = { 0x60, 0x68, 0x70, 0x78, 0x80, 0x88 };
-    const uintptr_t names[] = { 0xB0, 0x70, 0x48, 0x50, 0x88, 0x8, 0x28, 0x30 };
+    const uintptr_t child[] = { 0x80, 0x60, 0x68, 0x70, 0x78, 0x88 };
+    const uintptr_t names[] = { 0x78, 0xB0, 0x70, 0x48, 0x50, 0x88, 0x8, 0x28, 0x30 };
     auto has_players = [&](uintptr_t b, uintptr_t e, uintptr_t stride) {
         if (!looks_heap(b) || !looks_heap(e) || e <= b)
             return false;
@@ -175,7 +175,7 @@ bool is_datamodel(ext::Memory& mem, uintptr_t dm) {
 }
 
 uintptr_t follow_fake(ext::Memory& mem, uintptr_t fake, uintptr_t& used_off) {
-    const uintptr_t offs[] = { 0x1D8, 0x1C0, 0x1B8, 0x1E0, 0x198, 0x1A8, 0x1F0, 0x200, 0 };
+    const uintptr_t offs[] = { 0x1B8, 0x1D8, 0x1C0, 0x1E0, 0x198, 0x1A8, 0x1F0, 0x200, 0 };
     for (uintptr_t o : offs) {
         const uintptr_t dm = o ? mem.read_ptr(fake + o) : fake;
         if (is_datamodel(mem, dm)) {
@@ -391,7 +391,7 @@ bool OffsetSync::refresh() {
         uintptr_t best_rva = have >= 80 ? o.task_scheduler : 0;
         int best_sc = have >= 80 ? have : 0;
         const uintptr_t kTsTry[] = {
-            0x83B1A00, 0x8ABD728, 0x8A44D68, 0x8CA9CC8
+            0x68F3BC8, 0x68F3DA0, 0x83B1A00, 0x8ABD728, 0x8A44D68, 0x8CA9CC8
         };
         for (uintptr_t rva : kTsTry) {
             const uintptr_t val = mem.read_ptr(rp->base + rva);
