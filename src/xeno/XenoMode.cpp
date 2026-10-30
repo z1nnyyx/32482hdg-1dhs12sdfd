@@ -90,15 +90,27 @@ bool seed_client_with_dm(std::uint32_t pid, std::uintptr_t fake_dm) {
         return false;
     try {
         std::lock_guard<std::mutex> lock(clientsMtx);
-        // Already seeded?
-        for (const auto& c : Clients) {
-            if (c && c->PID == pid)
-                return true;
+        // Check for an existing client with this PID.
+        for (auto it = Clients.begin(); it != Clients.end(); ++it) {
+            if (*it && (*it)->PID == pid) {
+                // If the existing client has a working DataModel, keep it.
+                if ((*it)->FetchDataModel() != 0) {
+                    VT_LOG(L"voidtrace: seed skip — client pid=" +
+                           std::to_wstring(pid) + L" already has live DM");
+                    return true;
+                }
+                // Broken client (DM=0) from the log-scrape path — remove it
+                // so we can replace it with one that has the injected DM.
+                VT_LOG(L"voidtrace: replacing broken client pid=" +
+                       std::to_wstring(pid) + L" (DM was 0)");
+                Clients.erase(it);
+                break;
+            }
         }
         auto client = std::make_shared<RBXClient>(static_cast<DWORD>(pid),
                                                    fake_dm);
         VT_LOG(L"voidtrace: seeded client pid=" + std::to_wstring(pid) +
-               L" DM=" + std::to_wstring(fake_dm));
+               L" DM=0x" + std::to_wstring(fake_dm));
         Clients.push_back(std::move(client));
         return true;
     } catch (const std::exception& e) {
@@ -147,6 +159,11 @@ std::size_t execute(const std::string& source,
             auto it = std::find(targets.begin(), targets.end(), c->Username);
             if (it == targets.end())
                 continue;
+        }
+        if (c->FetchDataModel() == 0) {
+            VT_WARN(L"voidtrace: skipping client pid=" +
+                    std::to_wstring(c->PID) + L" (DataModel=0)");
+            continue;
         }
         c->execute(source);
         ++sent;
