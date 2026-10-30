@@ -435,6 +435,32 @@ bool OffsetSync::refresh() {
         }
     }
 
+    // Brute-force DataModel scan if hardcoded RVAs are dead.
+    if (!o.fake_datamodel) {
+        VT_LOG(L"fake_datamodel is 0 — starting brute-force .data scan");
+        const DWORD dm0 = GetTickCount();
+        uintptr_t best_dm_rva = 0;
+        each_region(proc, rp->base, rp->size, PAGE_READWRITE,
+            [&](uintptr_t at, const uint8_t* img, size_t n) {
+                if (best_dm_rva || (GetTickCount() - dm0 > 6000))
+                    return;
+                for (size_t i = 0; i + 8 <= n; i += 8) {
+                    const uintptr_t fake = *(const uintptr_t*)(img + i);
+                    if (!looks_heap(fake))
+                        continue;
+                    uintptr_t used = 0;
+                    if (follow_fake(mem, fake, used)) {
+                        best_dm_rva = (at + i) - rp->base;
+                        VT_LOG(L"auto fake_datamodel " + format_hex(best_dm_rva) +
+                               L"  fakeOff " + format_hex(used));
+                        return;
+                    }
+                }
+            });
+        if (best_dm_rva)
+            o.fake_datamodel = best_dm_rva;
+    }
+
     const auto out = data_root() / L"config" / L"offsets.json";
     Config::instance().save(out);
     hide_path(out);

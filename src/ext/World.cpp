@@ -784,17 +784,19 @@ uintptr_t World::resolve_datamodel() {
     }
     if (auto dm = resolve_from_scheduler())
         return take(dm) ? dm : 0;
-    if (!dm_scan_done_) {
-        dm_scan_done_ = true;
-        if (auto dm = discover_datamodel())
-            return take(dm) ? dm : 0;
-    }
+    if (auto dm = discover_datamodel())
+        return take(dm) ? dm : 0;
     return 0;
 }
 
 uintptr_t World::discover_datamodel() {
     if (!mem_.handle() || !base_ || !size_)
         return 0;
+    const DWORD now = GetTickCount();
+    if (dm_scan_done_ && (now - last_dm_check_) < 5000)
+        return 0;
+    dm_scan_done_ = true;
+    last_dm_check_ = now;
     auto cheap = [&](uintptr_t dm) {
         if (!mem_.looks(dm))
             return false;
@@ -830,7 +832,7 @@ uintptr_t World::discover_datamodel() {
                         continue;
                     if (fake >= base_ && fake < end)
                         continue;
-                    if (++tries > 40000)
+                    if (++tries > 120000)
                         goto done;
                     for (uintptr_t fo : foffs) {
                         const uintptr_t dm = fo ? mem_.read_ptr(fake + fo) : fake;
