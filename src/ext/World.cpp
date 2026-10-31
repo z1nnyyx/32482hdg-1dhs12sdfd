@@ -800,7 +800,8 @@ uintptr_t World::discover_datamodel() {
     auto cheap = [&](uintptr_t dm) {
         if (!mem_.looks(dm))
             return false;
-        for (uintptr_t co : { 0x68ull, 0x70ull, 0x78ull, 0x80ull }) {
+        for (uintptr_t co : { 0x48ull, 0x50ull, 0x58ull, 0x60ull, 0x68ull,
+                              0x70ull, 0x78ull, 0x80ull, 0x88ull, 0x90ull, 0x98ull }) {
             const uintptr_t b = mem_.read_ptr(dm + co);
             const uintptr_t e = mem_.read_ptr(dm + co + 8);
             if (!mem_.looks(b) || !mem_.looks(e) || e <= b)
@@ -816,7 +817,8 @@ uintptr_t World::discover_datamodel() {
     uintptr_t addr = base_;
     const uintptr_t end = base_ + size_;
     int tries = 0;
-    const uintptr_t foffs[] = { 0x1D8, 0x1C0, 0x1B8, 0, 0x1E0, 0x198 };
+    const uintptr_t foffs[] = { 0x1D8, 0x1C0, 0x1B8, 0, 0x1E0, 0x198, 0x200, 0x208, 0x210,
+                               0x218, 0x220, 0x228, 0x230, 0x238, 0x240, 0x190, 0x188 };
     while (addr < end) {
         if (!VirtualQueryEx(mem_.handle(), (LPCVOID)addr, &mbi, sizeof(mbi)))
             break;
@@ -832,7 +834,7 @@ uintptr_t World::discover_datamodel() {
                         continue;
                     if (fake >= base_ && fake < end)
                         continue;
-                    if (++tries > 120000)
+                    if (++tries > 300000)
                         goto done;
                     for (uintptr_t fo : foffs) {
                         const uintptr_t dm = fo ? mem_.read_ptr(fake + fo) : fake;
@@ -854,7 +856,177 @@ uintptr_t World::discover_datamodel() {
         addr = next;
     }
 done:
-    VT_WARN(L"DataModel scan miss — live RVAs are empty; Inject for Highlight ESP");
+    VT_WARN(L"DataModel scan miss (pointer-based) — trying string-based scan");
+    return discover_dm_by_string();
+}
+
+uintptr_t World::discover_dm_by_string() {
+    if (!mem_.handle())
+        return 0;
+    VT_LOG(L"String-based DataModel scan starting");
+    const DWORD t0 = GetTickCount();
+
+    // Phase 1: scan ALL committed heap pages for inline "Players\0"
+    // MSVC small-string: data starts at the string object base, 7 chars + NUL
+    const char needle[] = "Players";
+    const size_t needle_len = 7;
+    std::vector<uintptr_t> players_strings;
+    players_strings.reserve(64);
+
+    MEMORY_BASIC_INFORMATION mbi{};
+    uintptr_t addr = 0x10000;
+    while (addr < 0x00007FFFFFFEFFFFULL) {
+        if (!VirtualQueryEx(mem_.handle(), (LPCVOID)addr, &mbi, sizeof(mbi))) break;
+        const uintptr_t rsz = (uintptr_t)mbi.RegionSize;
+        const uintptr_t next = (uintptr_t)mbi.BaseAddress + rsz;
+        if (next <= addr) break;
+        bool rw = mbi.State == MEM_COMMIT &&
+            (mbi.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READ |
+                            PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY));
+        // Skip module pages and tiny/huge regions
+        if (rw && rsz >= 0x1000 && rsz <= 0x4000000 &&
+            !((uintptr_t)mbi.BaseAddress >= base_ &&
+              (uintptr_t)mbi.BaseAddress < base_ + size_))
+        {
+            std::vector<uint8_t> buf(rsz);
+            if (mem_.read((uintptr_t)mbi.BaseAddress, buf.data(), rsz)) {
+                for (size_t i = 0; i + 32 <= rsz; ++i) {
+                    if (memcmp(buf.data() + i, needle, needle_len + 1) == 0) {
+                        // Verify MSVC small string: sz at +0x10 == 7, cap at +0x18 < 16
+                        if (i + 0x20 <= rsz) {
+                            const size_t sz  = *(size_t*)(buf.data() + i + 0x10);
+                            const size_t cap = *(size_t*)(buf.data() + i + 0x18);
+                            if (sz == needle_len && cap >= needle_len && cap < 16) {
+                                players_strings.push_back((uintptr_t)mbi.BaseAddress + i);
+                            }
+                        }
+                    }
+                    if (players_strings.size() >= 200) break;
+                }
+            }
+        }
+        if (GetTickCount() - t0 > 8000 || players_strings.size() >= 200) break;
+        addr = next;
+    }
+    VT_LOG(L"String scan: found " + std::to_wstring(players_strings.size()) +
+           L" 'Players' string candidates in " +
+           std::to_wstring(GetTickCount() - t0) + L"ms");
+    if (players_strings.empty()) return 0;
+
+    // Phase 2: for each "Players" string, search heap for Instance objects
+    // that point to it. The Instance has a Name field at some offset that
+    // holds a pointer to this string object.
+    // Try name offsets: we read 0x200 bytes around each potential Instance
+    // and check which offset points to our string.
+    const uintptr_t name_try[] = {
+        0x28, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70,
+        0x78, 0x80, 0x88, 0x90, 0x98, 0xA0, 0xA8, 0xB0, 0xB8, 0xC0
+    };
+    const uintptr_t parent_try[] = {
+        0x28, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78
+    };
+    const uintptr_t child_try[] = {
+        0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90, 0x98
+    };
+
+    // Phase 2b: scan heap for pointers to our Players string objects
+    for (uintptr_t ps : players_strings) {
+        // Search nearby heap regions for 8-byte values == ps
+        // The pointer to the string object sits inside the Instance struct.
+        // We search a range of heap around ps (Instances are heap allocated nearby).
+        const uintptr_t search_lo = (ps > 0x100000) ? (ps - 0x100000) : 0x10000;
+        const uintptr_t search_hi = ps + 0x100000;
+        MEMORY_BASIC_INFORMATION mbi2{};
+        uintptr_t a2 = search_lo;
+        while (a2 < search_hi) {
+            if (!VirtualQueryEx(mem_.handle(), (LPCVOID)a2, &mbi2, sizeof(mbi2))) break;
+            const uintptr_t r2 = (uintptr_t)mbi2.RegionSize;
+            const uintptr_t n2 = (uintptr_t)mbi2.BaseAddress + r2;
+            if (n2 <= a2) break;
+            if (mbi2.State == MEM_COMMIT && r2 >= 0x1000 && r2 <= 0x4000000 &&
+                (mbi2.Protect & (PAGE_READWRITE | PAGE_READONLY)))
+            {
+                std::vector<uint8_t> buf2(r2);
+                if (mem_.read((uintptr_t)mbi2.BaseAddress, buf2.data(), r2)) {
+                    for (size_t j = 0; j + 8 <= r2; j += 8) {
+                        const uintptr_t val = *(uintptr_t*)(buf2.data() + j);
+                        if (val != ps) continue;
+                        // Found a pointer to our "Players" string.
+                        // val is at address (mbi2.BaseAddress + j).
+                        // If this is Instance.Name, the Instance base is at
+                        // (mbi2.BaseAddress + j - name_offset).
+                        const uintptr_t ptr_addr = (uintptr_t)mbi2.BaseAddress + j;
+                        for (uintptr_t no : name_try) {
+                            if (ptr_addr < no) continue;
+                            const uintptr_t inst = ptr_addr - no;
+                            if (!mem_.looks(inst)) continue;
+                            // Check if this Instance has a Parent that looks like DM
+                            for (uintptr_t po : parent_try) {
+                                if (po == no) continue;
+                                const uintptr_t parent = mem_.read_ptr(inst + po);
+                                if (!mem_.looks(parent) || parent == inst) continue;
+                                // Check parent's children for breadth
+                                for (uintptr_t co : child_try) {
+                                    const uintptr_t cb = mem_.read_ptr(parent + co);
+                                    const uintptr_t ce = mem_.read_ptr(parent + co + 8);
+                                    if (!mem_.looks(cb) || !mem_.looks(ce) || ce <= cb)
+                                        continue;
+                                    const size_t cn = (ce - cb) / 8;
+                                    if (cn < 5 || cn > 100) continue;
+                                    // Count named children
+                                    int named = 0;
+                                    int known = 0;
+                                    for (uintptr_t it = cb; it + 8 <= ce && named < 30; it += 8) {
+                                        const uintptr_t ch = mem_.read_ptr(it);
+                                        if (!mem_.looks(ch)) continue;
+                                        auto nm = mem_.rstring(ch + no);
+                                        if (nm.empty()) {
+                                            const uintptr_t sp = mem_.read_ptr(ch + no);
+                                            nm = mem_.rstring(sp);
+                                        }
+                                        if (nm.empty()) continue;
+                                        ++named;
+                                        if (nm == "Players" || nm == "Workspace" ||
+                                            nm == "Lighting" || nm == "CoreGui" ||
+                                            nm == "StarterPlayer" || nm == "ReplicatedStorage" ||
+                                            nm == "StarterGui" || nm == "Teams" ||
+                                            nm == "StarterPack" || nm == "SoundService")
+                                            ++known;
+                                    }
+                                    if (known >= 3) {
+                                        VT_LOG(L"String-scan DataModel FOUND  dm=" +
+                                               format_hex(parent) +
+                                               L"  nameOff=" + format_hex(no) +
+                                               L"  childOff=" + format_hex(co) +
+                                               L"  parentOff=" + format_hex(po) +
+                                               L"  named=" + std::to_wstring(named) +
+                                               L"  known=" + std::to_wstring(known) +
+                                               L"  in " + std::to_wstring(GetTickCount() - t0) + L"ms");
+                                        // Cache discovered offsets for future use
+                                        g_name_off_hint.store(no, std::memory_order_relaxed);
+                                        g_name_reprobe.store(true, std::memory_order_relaxed);
+                                        {
+                                            auto& ot = Config::instance().get().offsets;
+                                            ot.name_off  = no;
+                                            ot.child_off = co;
+                                        }
+                                        return parent;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (GetTickCount() - t0 > 15000) {
+                VT_WARN(L"String-scan timeout at 15s");
+                return 0;
+            }
+            a2 = n2;
+        }
+    }
+    VT_WARN(L"String-scan found no DataModel after " +
+            std::to_wstring(GetTickCount() - t0) + L"ms");
     return 0;
 }
 

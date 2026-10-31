@@ -33,6 +33,7 @@ static void newClient(DWORD pid) {
                 std::cout << "[voidtrace] newClient pid=" << pid
                           << " — log-scrape path got DM=0, not pushing "
                              "(VoidTrace seed will handle it)\n";
+                closedClients.insert(pid);
             }
             initializingClients.erase(pid);
         }
