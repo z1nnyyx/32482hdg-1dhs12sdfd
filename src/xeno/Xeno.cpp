@@ -11,38 +11,57 @@ std::unordered_set<DWORD> closedClients;
 std::unordered_set<DWORD> initializingClients;
 
 static void newClient(DWORD pid) {
-    if (closedClients.find(pid) != closedClients.end()) {
-        return;
-    }
-    initializingClients.insert(pid);
-    std::shared_ptr<RBXClient> client = std::make_shared<RBXClient>(pid);
-    {
+    try {
+        if (closedClients.find(pid) != closedClients.end())
+            return;
+        initializingClients.insert(pid);
+        std::shared_ptr<RBXClient> client = std::make_shared<RBXClient>(pid);
+        {
+            std::lock_guard<std::mutex> lock(clientsMtx);
+            // If VoidTrace's seed path already created a working client for
+            // this PID while we were constructing, don't push a duplicate.
+            bool already_has = false;
+            for (const auto& c : Clients) {
+                if (c && c->PID == pid) {
+                    already_has = true;
+                    break;
+                }
+            }
+            if (!already_has && client->FetchDataModel() != 0) {
+                Clients.push_back(std::move(client));
+            } else if (!already_has) {
+                std::cout << "[voidtrace] newClient pid=" << pid
+                          << " — log-scrape path got DM=0, not pushing "
+                             "(VoidTrace seed will handle it)\n";
+                closedClients.insert(pid);
+            }
+            initializingClients.erase(pid);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[voidtrace] client " << pid << " init threw: " << e.what() << "\n";
         std::lock_guard<std::mutex> lock(clientsMtx);
-        Clients.push_back(std::move(client));
         initializingClients.erase(pid);
+        closedClients.insert(pid);
+    } catch (...) {
+        std::cerr << "[voidtrace] client " << pid << " init threw unknown\n";
+        std::lock_guard<std::mutex> lock(clientsMtx);
+        initializingClients.erase(pid);
+        closedClients.insert(pid);
     }
 }
 
 static void init() {
-    DWORD CurrentPID = GetCurrentProcessId();
-    wchar_t path[MAX_PATH];
-
-    GetModuleFileNameW(0, path, MAX_PATH);
-
-    std::vector<DWORD> xenoPIDs = GetProcessIDsByName(wcsrchr(path, L'\\') + 1);
-
-    for (const DWORD& pid : xenoPIDs) { // Terminate existing Xeno processes
-        if (pid == CurrentPID)
-            continue;
-        HANDLE hXeno = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if (hXeno)
-            TerminateProcess(hXeno, 0);
-    }
+    // Upstream Xeno would terminate every other process named like
+    // itself here. VoidTrace runs standalone — removed, so launching a
+    // second VoidTrace.exe never kills the first.
 
     while (true) {
+        try {
         std::vector<DWORD> client_pids = GetProcessIDsByName(L"RobloxPlayerBeta.exe");
+        // Store Roblox (UWP) runs as Windows10Universal.exe
+        auto store_pids = GetProcessIDsByName(L"Windows10Universal.exe");
+        client_pids.insert(client_pids.end(), store_pids.begin(), store_pids.end());
         std::vector<DWORD> shader_pids = GetProcessIDsByName(L"eurotrucks2.exe");
-
         client_pids.insert(client_pids.end(), shader_pids.begin(), shader_pids.end());
 
         std::unordered_set<DWORD> current_pids(client_pids.begin(), client_pids.end());
@@ -65,6 +84,11 @@ static void init() {
                 }
             }
         }
+        } catch (const std::exception& e) {
+            std::cerr << "[voidtrace] init tick threw: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "[voidtrace] init tick threw unknown\n";
+        }
         Sleep(250);
     }
 }
@@ -86,13 +110,14 @@ extern "C" {
     }
 
     __declspec(dllexport) void Initialize() {
-        /*
+        // Open a diagnostic console so [voidtrace] std::cout lines are
+        // visible — otherwise all the step-by-step logging goes nowhere.
         FILE* conOut;
         AllocConsole();
-        SetConsoleTitleA("Xeno");
+        SetConsoleTitleA("VoidTrace Diagnostics");
         freopen_s(&conOut, "CONOUT$", "w", stdout);
         freopen_s(&conOut, "CONOUT$", "w", stderr);
-        */
+        std::cout << "[voidtrace] Initialize begin\n";
         
         HMODULE ntdll = LoadLibraryA("ntdll.dll");
         if (!ntdll) {

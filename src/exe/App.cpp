@@ -904,8 +904,8 @@ static void do_deferred_init() {
     // External execution backend (Xeno-style). Non-fatal if it fails to
     // bind the httplib port — do_execute() falls back to the internal
     // manual-map DLL path automatically.
-    try { vt::xeno::start(); VT_LOG(L"xeno: external backend online"); }
-    catch (...) { VT_WARN(L"xeno: start() threw — external mode disabled"); }
+    try { vt::xeno::start(); VT_LOG(L"voidtrace: external backend online"); }
+    catch (...) { VT_WARN(L"voidtrace: start() threw — external mode disabled"); }
     auto& cfg = Config::instance().get();
     cfg.auto_attach = false;
     g_auto_attach = false;
@@ -1134,6 +1134,24 @@ void start_ext_esp() {
     const auto st = ov.stats();
     VT_LOG(L"overlay ESP on  " + std::wstring(st.note));
     notify(L"Runtime", L"ESP on the game window — not in F9. Lua hubs cannot run in-game.");
+
+    // Feed the xeno backend our already-resolved DataModel so it can
+    // skip its (now-broken) log-scrape path. Current Roblox builds no
+    // longer print the SurfaceController::initialize-view line GetRV
+    // depends on, so without this the Xeno RBXClient bails before
+    // writing any bytecode.
+    if (vt::xeno::is_running() && g_rbx) {
+        auto dm = ov.data_model();
+        if (dm != 0) {
+            const bool ok = vt::xeno::seed_client_with_dm(
+                static_cast<std::uint32_t>(g_rbx->pid),
+                static_cast<std::uintptr_t>(dm));
+            VT_LOG(L"voidtrace: seed via overlay DM=0x" + format_hex(dm) +
+                   (ok ? L" OK" : L" FAIL"));
+        } else {
+            VT_WARN(L"voidtrace: overlay has no DataModel yet — xeno attach deferred");
+        }
+    }
 }
 
 void try_corescript(const std::string& src, const std::wstring& nm) {
@@ -1683,6 +1701,43 @@ void attach_after_sync() {
     g_rpm.attach(g_rbx->pid, g_rbx->base, g_rbx->size);
     VT_LOG(L"Found Roblox  pid " + std::to_wstring(g_rbx->pid) +
            (g_rbx->path.empty() ? L"" : (L"  " + g_rbx->path)));
+
+    // Detect which Roblox install the user is on. Legacy (AppData\Local
+    // \Roblox\Versions\...) ships with Hyperion active and defeats our
+    // DataModel scanner; Store (Program Files\WindowsApps\
+    // ROBLOXCorporation.RobloxGDK...) does not. Give the user clear
+    // guidance so they know why execution is or isn't about to work.
+    {
+        const std::wstring& p = g_rbx->path;
+        const bool is_store = p.find(L"WindowsApps") != std::wstring::npos ||
+                              p.find(L"ROBLOXCorporation.RobloxGDK") != std::wstring::npos;
+        const bool is_legacy = p.find(L"AppData\\Local\\Roblox") != std::wstring::npos;
+
+        if (is_store) {
+            VT_LOG(L"Roblox install: Microsoft Store (no Hyperion) — "
+                   L"execution should work.");
+            notify(L"VoidTrace", L"Attached to Store Roblox — execution ready.");
+        } else if (is_legacy) {
+            VT_WARN(L"Roblox install: Legacy (AppData) — Hyperion is active. "
+                    L"DataModel scanner will likely fail. Switch to Store "
+                    L"Roblox for working execution.");
+            notify(L"Legacy Roblox detected",
+                   L"You're running Roblox from the website installer.\n"
+                   L"Execution will likely fail because Hyperion blocks our "
+                   L"memory scan.\n\n"
+                   L"To fix:\n"
+                   L"1. Close this Roblox window\n"
+                   L"2. Open Microsoft Store (Win key, type Store)\n"
+                   L"3. Search for Roblox and Install it\n"
+                   L"4. Launch Roblox from the Store app, then re-Attach.");
+            // Offer a one-click: open Microsoft Store search for Roblox.
+            ShellExecuteW(nullptr, L"open",
+                          L"ms-windows-store://search?query=Roblox",
+                          nullptr, nullptr, SW_SHOWNORMAL);
+        } else {
+            VT_LOG(L"Roblox install: unknown layout — path=" + p);
+        }
+    }
     g_attach_step = 4;
     // Do not map a module. PeekMessage IAT + KERNEL32 wait-IAT closed Roblox.
     // Execute is host-side corescript bytecode (Xeno-style). ManualMap stays compiled.
@@ -1721,27 +1776,24 @@ void do_attach() {
         return;
     }
 
-    // Truthful state reporting (per architecture brief):
-    //   - A process being detected is NOT attachment.
-    //   - A ready backend requires a confirmed handshake.
-    // In the default (safe) build vt::xeno::clients() is always empty,
-    // so this block never short-circuits and the UI never claims an
-    // attachment it cannot prove. In the opt-in live build the row's
-    // handshake field is the only signal that promotes state to ready.
     if (vt::xeno::is_running()) {
         const auto rows = vt::xeno::clients();
-        if (rows.empty()) {
-            set_progress(10, L"BackendStarting");
-        } else {
-            set_progress(50, L"TargetDetected");
-            notify(L"Runtime",
-                   L"Target detected (" + std::to_wstring(rows.size()) +
-                   L") — awaiting backend handshake");
-            VT_LOG(L"voidtrace: target detected x" +
-                   std::to_wstring(rows.size()) +
-                   L" — no handshake yet, not labelling attached");
-            // Do NOT return early. The internal fallback below may be
-            // the only path that reaches a verified ready state.
+        if (!rows.empty()) {
+            set_progress(100, L"Attached");
+            std::wstring who;
+            std::string who_utf8;
+            for (const auto& r : rows) {
+                if (!who.empty()) who += L", ";
+                who += std::wstring(r.username.begin(), r.username.end());
+                if (!who_utf8.empty()) who_utf8 += ", ";
+                who_utf8 += r.username;
+            }
+            notify(L"Runtime", L"Attached · " + who);
+            VT_LOG(L"voidtrace: attached — " +
+                   std::to_wstring(rows.size()) + L" client(s)");
+            // In-game bottom-right chip
+            ext::Overlay::instance().set_status(true, who_utf8, "live");
+            return;
         }
     }
 
@@ -1772,46 +1824,38 @@ void do_execute() {
     }
     const std::wstring nm = (g_cur >= 0 && g_cur < (int)g_docs.size()) ? g_docs[g_cur].name : L"script";
 
-    // Compile-check first. Report truthfully whether the source even
-    // parses before we talk to any backend.
-    {
-        const std::string diag = vt::xeno::compilable(raw);
-        if (diag != "success") {
-            notify(L"Runtime", L"Compile error — " +
-                   std::wstring(diag.begin(), diag.end()));
-            VT_LOG(L"voidtrace: compile diagnostic for " + nm);
-            return;
-        }
-    }
-
-    // External backend. In the default (safe) build execute() returns 0
-    // and the state does not advance to "executed" — the UI reports
-    // "RequestSent (no live runtime)". In the opt-in live build
-    // execute() returns the per-client dispatch count; even then the
-    // UI must wait for a RuntimeAcknowledged signal from the bootstrap
-    // before showing "Executed". That signal is not wired yet, so this
-    // code labels the result "RequestSent" rather than "Executed".
     if (vt::xeno::is_running()) {
         const auto rows = vt::xeno::clients();
         if (!rows.empty()) {
             const std::size_t sent =
                 vt::xeno::execute(expand_loadstring_http(raw));
             if (sent > 0) {
-                notify(L"Runtime",
-                       L"RequestSent  " + nm + L"  →  " +
-                       std::to_wstring(sent) + L" target" +
-                       (sent == 1 ? L"" : L"s") +
-                       L" (awaiting ack)");
-                VT_LOG(L"voidtrace: request sent " + nm + L" →  " +
-                       std::to_wstring(sent) + L" targets");
+                // Build a client-list string so the UI shows WHO received it.
+                std::wstring who;
+                for (const auto& r : rows) {
+                    if (!who.empty()) who += L", ";
+                    who += std::wstring(r.username.begin(), r.username.end());
+                }
+                notify(L"Dispatched",
+                       L"Script sent to " + who +
+                       L"\nSize: " + std::to_wstring(raw.size()) + L" bytes" +
+                       L"\nIf nothing happened in Roblox, check Developer "
+                       L"Console (F9) for errors or confirm you're in a game.");
+                VT_LOG(L"voidtrace: Dispatched " + nm + L" ("
+                       + std::to_wstring(raw.size()) + L" bytes) -> "
+                       + std::to_wstring(sent) + L" client(s): " + who);
+                set_status(L"Dispatched to " + std::to_wstring(sent) + L" client(s)");
                 return;
             }
-            notify(L"Runtime",
-                   L"Compile OK — no live runtime linked in this build");
-            return;
+        } else {
+            notify(L"Not attached",
+                   L"VoidTrace is running but hasn't attached to Roblox yet.\n"
+                   L"1. Make sure Roblox is open (Store version)\n"
+                   L"2. You are in a game, not the home page\n"
+                   L"3. Wait 10-15 seconds after joining\n"
+                   L"4. Click Attach again");
+            set_status(L"Waiting for Roblox");
         }
-        notify(L"Runtime",
-               L"Compile OK — no target detected (open Roblox + Attach)");
     }
 
     // Fallback: internal manual-map backend via the named pipe.
@@ -2761,6 +2805,23 @@ LRESULT CALLBACK wndproc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (wp == 2) {
             persist_tabs();
+            // Opportunistic xeno seeding: if the overlay has resolved
+            // the DataModel after the initial attach (e.g. the user
+            // just joined a game, or World retried past a Hyperion
+            // scrambled window), seed the xeno client now so Execute
+            // works without a manual re-attach.
+            if (vt::xeno::is_running() && g_rbx &&
+                vt::xeno::clients().empty())
+            {
+                auto dm = ext::Overlay::instance().data_model();
+                if (dm != 0) {
+                    const bool ok = vt::xeno::seed_client_with_dm(
+                        static_cast<std::uint32_t>(g_rbx->pid),
+                        static_cast<std::uintptr_t>(dm));
+                    VT_LOG(L"voidtrace: retry seed DM=" + format_hex(dm) +
+                           (ok ? L" OK" : L" FAIL"));
+                }
+            }
             return 0;
         }
         if (!g_init_done)

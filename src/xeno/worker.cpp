@@ -7,6 +7,9 @@
 #include <fstream>
 #include <mutex>
 
+// Inline the xxhash implementation into this TU so no .c is needed.
+#define XXH_STATIC_LINKING_ONLY
+#define XXH_IMPLEMENTATION
 #include <xxhash.h>
 #include <zstd.h>
 
@@ -15,22 +18,31 @@
 #include "utils/resource.h"
 
 std::vector<std::uintptr_t> functions::GetChildrenAddresses(std::uintptr_t address, HANDLE handle) {
-    std::vector<std::uintptr_t> children;
-    {
-        std::uintptr_t childrenPtr = read_memory<std::uintptr_t>(address + offsets::Children, handle);
-        if (childrenPtr == 0)
-            return children;
+    std::uintptr_t childrenPtr = read_memory<std::uintptr_t>(address + offsets::Children(), handle);
+    if (childrenPtr == 0)
+        return {};
 
-        std::uintptr_t childrenStart = read_memory<std::uintptr_t>(childrenPtr, handle);
-        std::uintptr_t childrenEnd = read_memory<std::uintptr_t>(childrenPtr + 0x8, handle) + 1;
+    std::uintptr_t childrenStart = read_memory<std::uintptr_t>(childrenPtr, handle);
+    std::uintptr_t childrenEnd = read_memory<std::uintptr_t>(childrenPtr + 0x8, handle);
+    if (childrenEnd == 0 || childrenStart == 0 || childrenEnd <= childrenStart)
+        return {};
+    if ((childrenEnd - childrenStart) > 0x2000)
+        return {};
 
-        for (std::uintptr_t childAddress = childrenStart; childAddress < childrenEnd; childAddress += 0x10) {
-            std::uintptr_t childPtr = read_memory<std::uintptr_t>(childAddress, handle);
-            if (childPtr != 0)
-                children.push_back(childPtr);
+    // Try stride 16 (original Xeno) and stride 8; keep whichever
+    // yields more valid children. Roblox builds vary.
+    auto try_stride = [&](std::uintptr_t stride) {
+        std::vector<std::uintptr_t> out;
+        for (std::uintptr_t a = childrenStart; a + 8 <= childrenEnd + 1; a += stride) {
+            std::uintptr_t p = read_memory<std::uintptr_t>(a, handle);
+            if (p != 0 && p > 0x10000 && p < 0x00007FFFFFFFFFFFULL)
+                out.push_back(p);
         }
-    }
-    return children;
+        return out;
+    };
+    auto c16 = try_stride(0x10);
+    auto c8  = try_stride(0x8);
+    return (c8.size() > c16.size()) ? c8 : c16;
 }
 
 std::string functions::ReadRobloxString(std::uintptr_t address, HANDLE handle) {
@@ -131,69 +143,169 @@ static void replaceString(std::string& source, const std::string_view toReplace,
     }
 }
 
+// Overload: VoidTrace calls this when its own resolver has already found
+// the live (fake) DataModel. The log-scrape path (GetRV) is skipped
+// entirely. The real ctor delegates to the same body with the hint.
+RBXClient::RBXClient(DWORD processID, std::uintptr_t injectedFakeDM) :
+    handle(OpenProcess(PROCESS_ALL_ACCESS, TRUE, processID)),
+    InjectedFakeDataModel(injectedFakeDM),
+    PID(processID)
+{
+    std::cout << "[voidtrace] RBXClient ctor (seeded) pid=" << processID
+              << " injected_fake_DM=0x" << std::hex << injectedFakeDM << std::dec << "\n";
+    if (handle == NULL) {
+        std::cerr << "[voidtrace] step=OpenProcess FAILED err=" << GetLastError() << "\n";
+        return;
+    }
+    std::cout << "[voidtrace] step=OpenProcess OK\n";
+    ClientDir = GetHandlePath(handle).parent_path();
+    GUID = generateGUID();
+    Version = ClientDir.filename().string();
+    std::cout << "[voidtrace] step=version resolved: " << Version << "\n";
+    std::cout << "[voidtrace] skipping GetRV log-scrape (injected DM provided)\n";
+
+    // Run the full bootstrap hijack — this writes client.lua into the
+    // Url ModuleScript and VRNavigation so the VoidTrace folder appears
+    // in RobloxReplicatedStorage, which execute() depends on.
+    performBootstrapHijack();
+}
+
 RBXClient::RBXClient(DWORD processID) :
     handle(OpenProcess(PROCESS_ALL_ACCESS, TRUE, processID)),
     PID(processID)
 {
+    std::cout << "[voidtrace] RBXClient ctor pid=" << processID << "\n";
     if (handle == NULL) {
-        std::cerr << "[!] Failed to open process " << processID << ": " << GetLastError() << "\n";
+        std::cerr << "[voidtrace] step=OpenProcess FAILED err=" << GetLastError() << "\n";
         return;
     }
+    std::cout << "[voidtrace] step=OpenProcess OK\n";
 
     ClientDir = GetHandlePath(handle).parent_path();
     GUID = generateGUID();
     Version = ClientDir.filename().string();
+    std::cout << "[voidtrace] step=version resolved: " << Version << "\n";
 
-    // Not really the best way to wait for the client to load
-
+    // Working-set gate — wait up to 30 s then give up instead of
+    // spinning forever on a UWP container that caps its working set.
     PROCESS_MEMORY_COUNTERS memory_counter;
     K32GetProcessMemoryInfo(handle, &memory_counter, sizeof(memory_counter));
+    std::cout << "[voidtrace] step=workingset initial=" << memory_counter.WorkingSetSize << "\n";
+    int ws_tries = 0;
     while (memory_counter.WorkingSetSize < 150000000) {
+        if (++ws_tries > 300) {
+            std::cout << "[voidtrace] step=workingset TIMEOUT at "
+                      << memory_counter.WorkingSetSize
+                      << " bytes — proceeding anyway (UWP cap?)\n";
+            break;
+        }
         K32GetProcessMemoryInfo(handle, &memory_counter, sizeof(memory_counter));
         Sleep(100); 
     }
 
     HWND clientHWND = GetHWNDFromPID(GetProcessId(handle));
     if (!clientHWND) {
-        while (!clientHWND) {
+        int hwnd_tries = 0;
+        while (!clientHWND && hwnd_tries++ < 400) {
             clientHWND = GetHWNDFromPID(GetProcessId(handle));
-            std::cout << "Waiting for Client HWND\n";
             Sleep(25);
+        }
+        if (!clientHWND) {
+            std::cerr << "[voidtrace] FAIL — HWND not found after 10s\n";
+            return;
         }
         Sleep(1000);
     }
 
+    std::cout << "[voidtrace] step=GetRV begin\n";
     RenderView = GetRV(handle);
+    std::cout << "[voidtrace] step=GetRV result=" << RenderView << "\n";
+    if (RenderView == 0) {
+        std::cerr << "[voidtrace] FAIL — RenderView = 0. Log scan failed. "
+                     "Either Roblox logs are missing or path/perm wrong.\n";
+        return;
+    }
 
+    performBootstrapHijack();
+}
+
+// -----------------------------------------------------------------------
+// performBootstrapHijack — shared bootstrap that writes client.lua into
+// the Url ModuleScript and VRNavigation. Called by BOTH constructors.
+// -----------------------------------------------------------------------
+void RBXClient::performBootstrapHijack() {
     std::uintptr_t dataModelAddress = FetchDataModel();
+    std::cout << "[voidtrace] bootstrap: FetchDataModel result=0x"
+              << std::hex << dataModelAddress << std::dec << "\n";
     if (dataModelAddress == 0) {
-        std::cerr << "[!] Failed to fetch datamodel\n";
+        std::cerr << "[voidtrace] FAIL — DataModel = 0\n";
         return;
     }
 
     Instance DataModel(dataModelAddress, handle);
 
-    std::uintptr_t LocalPlayerAddr = read_memory<std::uintptr_t>(DataModel.FindFirstChildOfClassAddress("Players") + offsets::LocalPlayer, handle);
+    // Diagnostic: dump DataModel children so we can tell if offsets work
+    {
+        auto children = DataModel.GetChildrenAddresses();
+        std::cout << "[voidtrace] bootstrap: DataModel children count=" << children.size() << "\n";
+        int dump_n = 0;
+        for (auto addr : children) {
+            if (++dump_n > 12) break;
+            std::string n, cn;
+            try {
+                n = functions::ReadRobloxString(
+                    read_memory<std::uintptr_t>(addr + offsets::Name(), handle), handle);
+            } catch (...) {}
+            try {
+                cn = functions::ReadRobloxString(
+                    read_memory<std::uintptr_t>(
+                        read_memory<std::uintptr_t>(addr + offsets::ClassDescriptor, handle)
+                        + offsets::ClassName, handle), handle);
+            } catch (...) {}
+            std::cout << "  child[" << dump_n << "] addr=0x" << std::hex << addr << std::dec
+                      << " name=\"" << n << "\" class=\"" << cn << "\"\n";
+        }
+        if (children.empty()) {
+            std::cerr << "[voidtrace] FAIL — DataModel has 0 children. "
+                         "Instance offsets (Children=0x" << std::hex << offsets::Children()
+                      << " Name=0x" << offsets::Name() << std::dec
+                      << ") are likely wrong for this Roblox build.\n";
+            return;
+        }
+    }
 
-    while (LocalPlayerAddr == 0) {
+    std::uintptr_t playersAddr = DataModel.FindFirstChildOfClassAddress("Players");
+    if (playersAddr == 0) {
+        std::cerr << "[voidtrace] bootstrap: Players service not found "
+                     "(offsets may be wrong for this build)\n";
+        return;
+    }
+    std::uintptr_t LocalPlayerAddr = read_memory<std::uintptr_t>(playersAddr + offsets::LocalPlayer, handle);
+
+    int lp_wait = 0;
+    while (LocalPlayerAddr == 0 && lp_wait++ < 200) {
         std::cout << "Waiting for LocalPlayer\n";
-        LocalPlayerAddr = read_memory<std::uintptr_t>(DataModel.FindFirstChildOfClassAddress("Players") + offsets::LocalPlayer, handle);
+        LocalPlayerAddr = read_memory<std::uintptr_t>(playersAddr + offsets::LocalPlayer, handle);
         Sleep(25);
     }
 
-    Instance LocalPlayer(LocalPlayerAddr, handle);
-    Username = LocalPlayer.Name();
-
-    while (Username == "Player") {
-        std::cout << "Waiting for LocalPlayer to load\n";
+    if (LocalPlayerAddr) {
+        Instance LocalPlayer(LocalPlayerAddr, handle);
         Username = LocalPlayer.Name();
-        Sleep(25);
+
+        int name_wait = 0;
+        while (Username == "Player" && name_wait++ < 200) {
+            std::cout << "Waiting for LocalPlayer to load\n";
+            Username = LocalPlayer.Name();
+            Sleep(25);
+        }
     }
 
-    if (Username == "")
+    if (Username.empty() || Username == "N/A")
         Username = "Unknown";
 
-    // Need to add checks else the process will crash, yes it sucks.
+    std::cout << "[voidtrace] bootstrap: Username=" << Username << "\n";
+
     auto CoreGui = DataModel.FindFirstChild("CoreGui");
     if (!CoreGui) {
         std::cerr << "[!] Game->CoreGui not found\n";
@@ -213,18 +325,24 @@ RBXClient::RBXClient(DWORD processID) :
 
     std::unique_ptr<Instance> PatchScript = nullptr;
     {
-        auto Common = Modules->FindFirstChild("Common");
-        if (!Common) {
-            std::cerr << "[!] Modules->Common not found\n";
-            return;
+        auto InGameMenu = Modules->FindFirstChild("InGameMenu");
+        if (InGameMenu) {
+            auto Network = InGameMenu->FindFirstChild("Network");
+            if (Network)
+                PatchScript = Network->FindFirstChild("Url");
         }
-        PatchScript = Common->FindFirstChild("Url");
+        if (!PatchScript) {
+            auto Common = Modules->FindFirstChild("Common");
+            if (Common)
+                PatchScript = Common->FindFirstChild("Url");
+        }
     }
 
     if (!PatchScript) {
-        std::cerr << "[!] Patch Script was not found\n";
+        std::cerr << "[!] Patch Script 'Url' was not found in Modules.InGameMenu.Network or Modules.Common\n";
         return;
     }
+    std::cout << "[+] PatchScript resolved at 0x" << std::hex << PatchScript->Self() << std::dec << "\n";
 
     std::string clientScript;
     {
@@ -241,7 +359,7 @@ RBXClient::RBXClient(DWORD processID) :
 
         HGLOBAL data = LoadResource(module, resource);
         if (!data) {
-            std::cerr << "[!] Could not get the could load resource\n";
+            std::cerr << "[!] Could not load resource\n";
             return;
         }
 
@@ -256,17 +374,20 @@ RBXClient::RBXClient(DWORD processID) :
 
     const std::string PatchScriptSource = "--!native\n--!optimize 1\n--!nonstrict\nlocal a={}local b=game:GetService(\"ContentProvider\")local function c(d)local e,f=d:find(\"%.\")local g=d:sub(f+1)if g:sub(-1)~=\"/\"then g=g..\"/\"end;return g end;local d=b.BaseUrl;local g=c(d)local h=string.format(\"https://games.%s\",g)local i=string.format(\"https://apis.rcs.%s\",g)local j=string.format(\"https://apis.%s\",g)local k=string.format(\"https://accountsettings.%s\",g)local l=string.format(\"https://gameinternationalization.%s\",g)local m=string.format(\"https://locale.%s\",g)local n=string.format(\"https://users.%s\",g)local o={GAME_URL=h,RCS_URL=i,APIS_URL=j,ACCOUNT_SETTINGS_URL=k,GAME_INTERNATIONALIZATION_URL=l,LOCALE_URL=m,ROLES_URL=n}setmetatable(a,{__newindex=function(p,q,r)end,__index=function(p,r)return o[r]end})return a";
 
-    if (DataModel.Name() == "LuaApp") { // In home page
+    if (DataModel.Name() == "LuaApp") {
+        std::cout << "[voidtrace] bootstrap: LuaApp (home page) — writing PatchScript only\n";
         PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource));
         return;
     }
 
-    // In-game, hooking a module that has custom bytecode we are writing.
-
     auto RobloxReplicatedStorage = DataModel.FindFirstChildOfClass("RobloxReplicatedStorage");
+    if (!RobloxReplicatedStorage) {
+        std::cerr << "[!] RobloxReplicatedStorage not found\n";
+        return;
+    }
+
     if (RobloxReplicatedStorage->FindFirstChild("VoidTrace")) {
-        std::cerr << "[!] Client '" << Username << "' is already attached\n";
-        // When player serverhops the GUID is going to be replaced with the new one. This fixes the communication with the bridge
+        std::cout << "[voidtrace] bootstrap: VoidTrace folder already exists — re-patching Url\n";
         PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource));
         return;
     }
@@ -287,10 +408,10 @@ RBXClient::RBXClient(DWORD processID) :
         return;
     }
 
-    if (!RobloxGui->FindFirstChild("DropDownFullscreenFrame")) { // If the player is joining the game
+    if (!RobloxGui->FindFirstChild("DropDownFullscreenFrame")) {
         std::cout << "Waiting for " + Username + " to join the game\n";
         RobloxGui->WaitForChildAddress("DropDownFullscreenFrame");
-        if (DataModel.Name() == "App") { // In case the player leaves the join page
+        if (DataModel.Name() == "App") {
             PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource));
             return;
         }
@@ -328,59 +449,83 @@ RBXClient::RBXClient(DWORD processID) :
         return;
     }
 
+    std::cout << "[voidtrace] bootstrap: writing bytecode to VRNavigation + Url\n";
+
     VRNavigation->UnlockModule();
     write_memory<std::uintptr_t>(PlayerListManager->Self() + offsets::This, VRNavigation->Self(), handle);
 
-    VRNavigation->SetBytecode(Compile("script.Parent=nil;coroutine.wrap(function(...)" + clientScript + "\nend)();while wait(9e9) do wait(9e9);end"), true); // Need to add a while loop otherwise the script will return and stop the thread
-    PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource)); // For later use (when player leaves game/teleports)
+    VRNavigation->SetBytecode(Compile("script.Parent=nil;coroutine.wrap(function(...)" + clientScript + "\nend)();while wait(9e9) do wait(9e9);end"), true);
+    PatchScript->SetBytecode(Compile("coroutine.wrap(function(...)" + clientScript + "\nend)();" + PatchScriptSource));
 
-    HWND previousHWND = GetForegroundWindow();
+    HWND clientHWND = GetHWNDFromPID(GetProcessId(handle));
+    if (clientHWND) {
+        HWND previousHWND = GetForegroundWindow();
 
-    while (GetForegroundWindow() != clientHWND) {
-        SetForegroundWindow(clientHWND);
-        Sleep(5);
+        int focus_tries = 0;
+        while (GetForegroundWindow() != clientHWND && focus_tries++ < 100) {
+            SetForegroundWindow(clientHWND);
+            Sleep(5);
+        }
+
+        keybd_event(VK_ESCAPE, MapVirtualKey(VK_ESCAPE, 0), KEYEVENTF_SCANCODE, 0);
+        keybd_event(VK_ESCAPE, MapVirtualKey(VK_ESCAPE, 0), KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, 0);
+
+        Sleep(100);
+
+        if (previousHWND != nullptr)
+            SetForegroundWindow(previousHWND);
+
+        Sleep(800);
+    } else {
+        std::cerr << "[voidtrace] bootstrap: no HWND — skipping ESC keypress\n";
     }
-
-    keybd_event(VK_ESCAPE, MapVirtualKey(VK_ESCAPE, 0), KEYEVENTF_SCANCODE, 0);
-    keybd_event(VK_ESCAPE, MapVirtualKey(VK_ESCAPE, 0), KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, 0);
-
-    Sleep(100);
-
-    if (previousHWND != nullptr)
-        SetForegroundWindow(previousHWND);
-
-    Sleep(800);
 
     write_memory<std::uintptr_t>(PlayerListManager->Self() + offsets::This, PlayerListManager->Self(), handle);
 
-    if (Username == "Unknown") { // Atleast the username dosen't have to be "Unknown" and we can try to change that
+    if (Username == "Unknown") {
         std::uintptr_t newLocalPlayerAddr = read_memory<std::uintptr_t>(DataModel.FindFirstChildOfClassAddress("Players") + offsets::LocalPlayer, handle);
-        Instance newLocalPlayer = Instance(newLocalPlayerAddr, handle);
-        Username = newLocalPlayer.Name();
-        if (Username == "")
-            Username = "Unknown";
+        if (newLocalPlayerAddr) {
+            Instance newLocalPlayer = Instance(newLocalPlayerAddr, handle);
+            Username = newLocalPlayer.Name();
+            if (Username.empty())
+                Username = "Unknown";
+        }
     }
+
+    std::cout << "[voidtrace] bootstrap: COMPLETE — VoidTrace folder should now appear in RRS\n";
 }
 
 void RBXClient::execute(const std::string& source) const {
     std::uintptr_t dataModel_Address = FetchDataModel();
+    if (dataModel_Address == 0) {
+        std::cerr << "[voidtrace] execute: DataModel = 0 — cannot dispatch\n";
+        return;
+    }
 
     Instance DataModel(dataModel_Address, handle);
     auto RobloxReplicatedStorage = DataModel.FindFirstChildOfClass("RobloxReplicatedStorage");
-    if (!RobloxReplicatedStorage)
+    if (!RobloxReplicatedStorage) {
+        std::cerr << "[voidtrace] execute: RobloxReplicatedStorage not found\n";
         return;
+    }
 
     auto xenoFolder = RobloxReplicatedStorage->FindFirstChild("VoidTrace");
-    if (!xenoFolder)
+    if (!xenoFolder) {
+        std::cerr << "[voidtrace] execute: VoidTrace folder not found in RRS — bootstrap may not have run\n";
         return;
+    }
 
     auto xenoModules = xenoFolder->FindFirstChild("Scripts");
-    if (!xenoModules)
+    if (!xenoModules) {
+        std::cerr << "[voidtrace] execute: VoidTrace/Scripts not found\n";
         return;
+    }
 
     auto xenoModule = xenoModules->FindFirstChildOfClass("ModuleScript");
-    if (!xenoModule)
+    if (!xenoModule) {
+        std::cerr << "[voidtrace] execute: no ModuleScript in VoidTrace/Scripts\n";
         return;
+    }
 
     xenoModule->SetBytecode(Compile("return {['v o i d t r a c e']=function(...)do local function s(i, v)getfenv(debug.info(0, 'f'))[i] = v;getfenv(debug.info(1, 'f'))[i] = v;end;for i,v in pairs(getfenv(debug.info(1,'f')))do s(i, v)end;setmetatable(getgenv(),{__newindex=function(t,i,v)rawset(t,i,v)s(i,v)end})end;" + source +"\nend}"), true);
     
@@ -456,13 +601,60 @@ std::vector<DWORD> GetProcessIDsByName(const std::wstring_view processName) {
     return processIDs;
 }
 
+static std::uintptr_t GetRV_impl(HANDLE handle);
+
 std::uintptr_t GetRV(HANDLE handle)
 {
-    std::filesystem::path localAppData = std::filesystem::temp_directory_path().parent_path().parent_path();
-    std::filesystem::path logs = localAppData / "Roblox" / "logs";
+    // Outer try/catch: GetRV touches the filesystem on every path and
+    // std::filesystem throws filesystem_error on race conditions, locked
+    // files, permission failures, etc. An uncaught throw in a detached
+    // thread would terminate the host (seen as the VEH crash dialog).
+    try {
+        return GetRV_impl(handle);
+    } catch (const std::exception& e) {
+        std::cerr << "[voidtrace] GetRV threw: " << e.what() << "\n";
+        return 0;
+    } catch (...) {
+        std::cerr << "[voidtrace] GetRV threw unknown\n";
+        return 0;
+    }
+}
 
-    if (!std::filesystem::is_directory(logs)) {
-        std::cerr << "[!] Roblox logs directory not found\n";
+static std::uintptr_t GetRV_impl(HANDLE handle)
+{
+    // Standalone Roblox puts logs in %LOCALAPPDATA%\Roblox\logs.
+    // UWP Store Roblox puts them inside its sandboxed package folder:
+    //   %LOCALAPPDATA%\Packages\ROBLOXCorporation.RobloxGDK_*\LocalCache\Roaming\Roblox\logs
+    // Scan both; take whichever has recent *.log files.
+    std::filesystem::path localAppData = std::filesystem::temp_directory_path().parent_path().parent_path();
+
+    std::vector<std::filesystem::path> candidate_log_dirs;
+    candidate_log_dirs.push_back(localAppData / "Roblox" / "logs");
+
+    const std::filesystem::path pkgRoot = localAppData / "Packages";
+    if (std::filesystem::is_directory(pkgRoot)) {
+        std::error_code ec;
+        for (const auto& ent : std::filesystem::directory_iterator(pkgRoot, ec)) {
+            const auto name = ent.path().filename().string();
+            if (name.find("ROBLOXCorporation") == std::string::npos)
+                continue;
+            // Try all three LocalCache subpaths Roblox UWP has used.
+            candidate_log_dirs.push_back(ent.path() / "LocalCache" / "Roaming" / "Roblox" / "logs");
+            candidate_log_dirs.push_back(ent.path() / "LocalCache" / "Local" / "Roblox" / "logs");
+            candidate_log_dirs.push_back(ent.path() / "LocalState" / "Roblox" / "logs");
+        }
+    }
+
+    std::filesystem::path logs;
+    for (const auto& d : candidate_log_dirs) {
+        if (std::filesystem::is_directory(d)) {
+            logs = d;
+            std::cout << "[+] Using Roblox logs: " << d << "\n";
+            break;
+        }
+    }
+    if (logs.empty()) {
+        std::cerr << "[!] Roblox logs directory not found in any known path\n";
         return 0;
     }
 
@@ -471,10 +663,19 @@ std::uintptr_t GetRV(HANDLE handle)
         tries -= 1;
         std::vector<std::filesystem::path> logFiles;
 
-        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(logs)) {
-            std::filesystem::path path = entry.path();
-            if (entry.is_regular_file() && path.extension() == ".log")
-                logFiles.push_back(path);
+        // Use error_code variants everywhere — a file vanishing mid-scan
+        // (or a UWP permission error on jamie's PC) must not throw.
+        std::error_code ec;
+        for (auto it = std::filesystem::directory_iterator(logs, ec);
+             !ec && it != std::filesystem::directory_iterator();
+             it.increment(ec))
+        {
+            std::error_code ec2;
+            if (it->is_regular_file(ec2) && !ec2 &&
+                it->path().extension() == ".log")
+            {
+                logFiles.push_back(it->path());
+            }
         }
 
         if (logFiles.empty()) {
@@ -483,14 +684,18 @@ std::uintptr_t GetRV(HANDLE handle)
         }
 
         std::sort(logFiles.begin(), logFiles.end(), [](const auto& x, const auto& y) {
-            return std::filesystem::last_write_time(x) > std::filesystem::last_write_time(y);
+            std::error_code ea, eb;
+            auto tx = std::filesystem::last_write_time(x, ea);
+            auto ty = std::filesystem::last_write_time(y, eb);
+            if (ea || eb) return false;
+            return tx > ty;
         });
 
         std::vector<std::filesystem::path> lockedFiles;
         for (const std::filesystem::path& logPath : logFiles) {
-            try {
-                std::filesystem::remove(logPath);
-            } catch (const std::filesystem::filesystem_error& e) {
+            std::error_code rem_ec;
+            if (!std::filesystem::remove(logPath, rem_ec) || rem_ec) {
+                // File is locked (= Roblox has it open = active log).
                 lockedFiles.push_back(logPath);
             }
         }
@@ -554,49 +759,13 @@ static std::string compress(const std::string_view bytecode)
     return std::string(buffer.data(), size);
 }
 
-std::string decompress(const std::string_view compressed) {
-    const uint8_t bytecodeSignature[4] = { 'R', 'S', 'B', '1' };
-    const int bytecodeHashMultiplier = 41;
-    const int bytecodeHashSeed = 42;
-
-    if (compressed.size() < 8)
-        return "Compressed data too short";
-
-    std::vector<uint8_t> compressedData(compressed.begin(), compressed.end());
-    std::vector<uint8_t> headerBuffer(4);
-
-    for (size_t i = 0; i < 4; ++i) {
-        headerBuffer[i] = compressedData[i] ^ bytecodeSignature[i];
-        headerBuffer[i] = (headerBuffer[i] - i * bytecodeHashMultiplier) % 256;
-    }
-
-    for (size_t i = 0; i < compressedData.size(); ++i) {
-        compressedData[i] ^= (headerBuffer[i % 4] + i * bytecodeHashMultiplier) % 256;
-    }
-
-    uint32_t hashValue = 0;
-    for (size_t i = 0; i < 4; ++i) {
-        hashValue |= headerBuffer[i] << (i * 8);
-    }
-
-    uint32_t rehash = XXH32(compressedData.data(), compressedData.size(), bytecodeHashSeed);
-    if (rehash != hashValue)
-        return "Hash mismatch during decompression";
-
-    uint32_t decompressedSize = 0;
-    for (size_t i = 4; i < 8; ++i) {
-        decompressedSize |= compressedData[i] << ((i - 4) * 8);
-    }
-
-    compressedData = std::vector<uint8_t>(compressedData.begin() + 8, compressedData.end());
-    std::vector<uint8_t> decompressed(decompressedSize);
-
-    size_t const actualDecompressedSize = ZSTD_decompress(decompressed.data(), decompressedSize, compressedData.data(), compressedData.size());
-    if (ZSTD_isError(actualDecompressedSize))
-        return "ZSTD decompression error: " + std::string(ZSTD_getErrorName(actualDecompressedSize));
-
-    decompressed.resize(actualDecompressedSize);
-    return std::string(decompressed.begin(), decompressed.end());
+std::string decompress(const std::string_view /*compressed*/) {
+    // VoidTrace's vcxproj links only zstd's compress sources (needed to
+    // write bytecode INTO Roblox). The decompress path exists only for
+    // reading bytecode OUT of a hijacked ModuleScript via GetBytecode(),
+    // which is not on the Execute hot path. Stubbed to keep the linker
+    // happy without pulling in zstd_decompress.c + huf_decompress.c.
+    return "decompression disabled in this build";
 }
 
 std::string compilable(const std::string& source, bool returnBytecode) {

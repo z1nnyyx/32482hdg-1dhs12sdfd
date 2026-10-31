@@ -68,4 +68,11 @@ std::string compilable(const std::string& source);
 // True when start() succeeded and the tracker is running.
 bool is_running();
 
+// Seed a client directly, bypassing the Xeno log-scan + tracker spin-up.
+// Pass the live (fake) DataModel address that VoidTrace already found via
+// its own OffsetSync/World path. Current Roblox builds no longer print
+// the log line GetRV relies on, so this is the primary attach route.
+// Returns true if a client was added or already present for this PID.
+bool seed_client_with_dm(std::uint32_t pid, std::uintptr_t fake_dm);
+
 } // namespace vt::xeno

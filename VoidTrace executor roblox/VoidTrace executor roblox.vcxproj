@@ -80,7 +80,7 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\..\src;$(MSBuildProjectDirectory)\..\external\luau\Compiler\include;$(MSBuildProjectDirectory)\..\external\luau\Ast\include;$(MSBuildProjectDirectory)\..\external\luau\Common\include;$(MSBuildProjectDirectory)\..\external\luau\VM\include;$(MSBuildProjectDirectory)\..\vcpkg\buildtrees\zstd\src\v1.5.7-bb6cae2b2e.clean\lib;$(MSBuildProjectDirectory)\..\vcpkg\buildtrees\zstd\src\v1.5.7-bb6cae2b2e.clean\lib\common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\..\src;$(MSBuildProjectDirectory)\..\src\xeno\vendor\include;$(MSBuildProjectDirectory)\..\vcpkg\buildtrees\zstd\src\v1.5.7-bb6cae2b2e.clean\lib;$(MSBuildProjectDirectory)\..\vcpkg\buildtrees\zstd\src\v1.5.7-bb6cae2b2e.clean\lib\common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;VT_HOST;ZSTD_DISABLE_ASM;ZSTD_LEGACY_SUPPORT=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
@@ -171,25 +171,29 @@ if exist "$(OutDir)libcrypto-3-x64.dll" del /F /Q "$(OutDir)libcrypto-3-x64.dll"
     <ClCompile Include="..\vcpkg\buildtrees\zstd\src\v1.5.7-bb6cae2b2e.clean\lib\compress\zstd_ldm.c" />
     <ClCompile Include="..\vcpkg\buildtrees\zstd\src\v1.5.7-bb6cae2b2e.clean\lib\compress\zstd_opt.c" />
     <ClCompile Include="..\vcpkg\buildtrees\zstd\src\v1.5.7-bb6cae2b2e.clean\lib\compress\zstd_preSplit.c" />
-    <ClCompile Include="..\external\luau\Ast\src\Allocator.cpp" />
-    <ClCompile Include="..\external\luau\Ast\src\Ast.cpp" />
-    <ClCompile Include="..\external\luau\Ast\src\Confusables.cpp" />
-    <ClCompile Include="..\external\luau\Ast\src\Cst.cpp" />
-    <ClCompile Include="..\external\luau\Ast\src\Lexer.cpp" />
-    <ClCompile Include="..\external\luau\Ast\src\Location.cpp" />
-    <ClCompile Include="..\external\luau\Ast\src\Parser.cpp" />
-    <ClCompile Include="..\external\luau\Ast\src\StringUtils.cpp" />
-    <ClCompile Include="..\external\luau\Ast\src\TimeTrace.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\BuiltinFolding.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\Builtins.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\BytecodeBuilder.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\Compiler.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\ConstantFolding.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\CostModel.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\lcode.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\TableShape.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\Types.cpp" />
-    <ClCompile Include="..\external\luau\Compiler\src\ValueTracking.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\Ast.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\BuiltinFolding.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\Builtins.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\BytecodeBuilder.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\Compiler.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\Confusables.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\ConstantFolding.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\CostModel.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\Lexer.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\Location.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\Parser.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\StringUtils.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\TableShape.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\TimeTrace.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\Types.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\ValueTracking.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\Luau\lcode.cpp" />
+    <ClCompile Include="..\src\xeno\XenoMode.cpp" />
+    <ClCompile Include="..\src\xeno\Xeno.cpp" />
+    <ClCompile Include="..\src\xeno\worker.cpp" />
+    <ClCompile Include="..\src\xeno\server.cpp" />
+    <ClCompile Include="..\src\xeno\vendor\include\utils\ntdll.cpp" />
+    <ClCompile Include="..\src\sandbox\LuauSandbox.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\exe\App.h" />

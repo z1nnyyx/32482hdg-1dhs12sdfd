@@ -45,6 +45,9 @@ public:
     uintptr_t find_lua_state(uintptr_t job) const;
     bool execute_script(const std::string& source, std::wstring* err);
     void set_fallback_size(float w, float h) { if (w > 64 && h > 64) { width_ = w; height_ = h; } }
+    // Expose the resolved DataModel so the xeno backend can bypass
+    // its own log-scrape path (which no longer works on current Roblox).
+    uintptr_t cached_data_model() const { return cached_dm_; }
 
 private:
     std::string class_name(uintptr_t inst) const;
@@ -59,6 +62,7 @@ private:
     bool looks_instance(uintptr_t p) const;
     uintptr_t find_service(uintptr_t dm, const char* name) const;
     uintptr_t discover_datamodel();
+    uintptr_t discover_dm_by_string();
     uintptr_t resolve_datamodel();
     uintptr_t resolve_from_scheduler();
     uintptr_t resolve_visual();
