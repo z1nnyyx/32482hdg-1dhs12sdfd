@@ -12,6 +12,7 @@
 // going through a loader-exported DLL.
 
 #include "xeno/XenoMode.h"
+#include "shared/Config.h"
 #include "shared/Log.h"
 
 #include <atomic>
@@ -106,6 +107,12 @@ bool seed_client_with_dm(std::uint32_t pid, std::uintptr_t fake_dm) {
                 Clients.erase(it);
                 break;
             }
+        }
+        // Bridge discovered offsets from Config into the Xeno backend
+        // so Instance tree-walking uses the correct layout for this build.
+        {
+            const auto& ot = vt::Config::instance().get().offsets;
+            offsets::apply_discovered(ot.name_off, ot.child_off, 0);
         }
         auto client = std::make_shared<RBXClient>(static_cast<DWORD>(pid),
                                                    fake_dm);

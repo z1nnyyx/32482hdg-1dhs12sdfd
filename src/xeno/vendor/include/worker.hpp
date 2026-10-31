@@ -17,11 +17,19 @@
 #include "utils/ntdll.h"
 
 namespace offsets {
-    // Instance — updated for Roblox 2.745 / version-765338e04cf54fde
+    // Instance offsets — defaults for version-765338e04cf54fde.
+    // Name, Children, and Parent are runtime-overridable so the
+    // string-based DataModel scanner can feed discovered values.
     constexpr std::uint64_t This = 0x8;
-    constexpr std::uint64_t Name = 0x78;
-    constexpr std::uint64_t Children = 0x80;
-    constexpr std::uint64_t Parent = 0x50;
+
+    // --- runtime-overridable offsets ---
+    inline std::uint64_t& Name_mut()     { static std::uint64_t v = 0x78; return v; }
+    inline std::uint64_t& Children_mut() { static std::uint64_t v = 0x80; return v; }
+    inline std::uint64_t& Parent_mut()   { static std::uint64_t v = 0x50; return v; }
+    // Read accessors (drop-in replacement for the old constexpr)
+    inline std::uint64_t Name()     { return Name_mut(); }
+    inline std::uint64_t Children() { return Children_mut(); }
+    inline std::uint64_t Parent()   { return Parent_mut(); }
 
     constexpr std::uint64_t ClassDescriptor = 0x18;
     constexpr std::uint64_t ClassName = 0x8;
@@ -38,6 +46,16 @@ namespace offsets {
     // Other
     constexpr std::uint64_t LocalPlayer = 0x128;
     constexpr std::uint64_t ObjectValue = 0xD8;
+
+    // Called by VoidTrace after the string scanner discovers live offsets.
+    inline void apply_discovered(std::uint64_t name, std::uint64_t children, std::uint64_t parent) {
+        if (name)     Name_mut()     = name;
+        if (children) Children_mut() = children;
+        if (parent)   Parent_mut()   = parent;
+        std::cout << "[voidtrace] offsets::apply_discovered  Name=0x"
+                  << std::hex << Name() << " Children=0x" << Children()
+                  << " Parent=0x" << Parent() << std::dec << "\n";
+    }
 }
 
 const std::string_view Xeno_Version = "1.1.2-voidtrace";
@@ -96,7 +114,7 @@ public:
     std::uintptr_t FindFirstChildAddress(const std::string_view name) const {
         std::vector<std::uintptr_t> childAddresses = GetChildrenAddresses();
         for (std::uintptr_t address : childAddresses) {
-            if (functions::ReadRobloxString(read_memory<std::uintptr_t>(address + offsets::Name, handle), handle) == name)
+            if (functions::ReadRobloxString(read_memory<std::uintptr_t>(address + offsets::Name(), handle), handle) == name)
                 return address;
         }
         return 0;
@@ -214,7 +232,7 @@ public:
     }
 
     inline std::string Name() const {
-        return functions::ReadRobloxString(read_memory<std::uintptr_t>(_Self + offsets::Name, handle), handle);
+        return functions::ReadRobloxString(read_memory<std::uintptr_t>(_Self + offsets::Name(), handle), handle);
     }
 
     inline std::string ClassName() const {
@@ -222,7 +240,7 @@ public:
     }
 
     inline std::uintptr_t ParentAddress() const {
-        return read_memory<std::uintptr_t>(_Self + offsets::Parent, handle);
+        return read_memory<std::uintptr_t>(_Self + offsets::Parent(), handle);
     }
 
     inline std::unique_ptr<Instance> Parent() const {

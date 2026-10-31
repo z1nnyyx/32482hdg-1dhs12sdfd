@@ -18,22 +18,31 @@
 #include "utils/resource.h"
 
 std::vector<std::uintptr_t> functions::GetChildrenAddresses(std::uintptr_t address, HANDLE handle) {
-    std::vector<std::uintptr_t> children;
-    {
-        std::uintptr_t childrenPtr = read_memory<std::uintptr_t>(address + offsets::Children, handle);
-        if (childrenPtr == 0)
-            return children;
+    std::uintptr_t childrenPtr = read_memory<std::uintptr_t>(address + offsets::Children(), handle);
+    if (childrenPtr == 0)
+        return {};
 
-        std::uintptr_t childrenStart = read_memory<std::uintptr_t>(childrenPtr, handle);
-        std::uintptr_t childrenEnd = read_memory<std::uintptr_t>(childrenPtr + 0x8, handle) + 1;
+    std::uintptr_t childrenStart = read_memory<std::uintptr_t>(childrenPtr, handle);
+    std::uintptr_t childrenEnd = read_memory<std::uintptr_t>(childrenPtr + 0x8, handle);
+    if (childrenEnd == 0 || childrenStart == 0 || childrenEnd <= childrenStart)
+        return {};
+    if ((childrenEnd - childrenStart) > 0x2000)
+        return {};
 
-        for (std::uintptr_t childAddress = childrenStart; childAddress < childrenEnd; childAddress += 0x10) {
-            std::uintptr_t childPtr = read_memory<std::uintptr_t>(childAddress, handle);
-            if (childPtr != 0)
-                children.push_back(childPtr);
+    // Try stride 16 (original Xeno) and stride 8; keep whichever
+    // yields more valid children. Roblox builds vary.
+    auto try_stride = [&](std::uintptr_t stride) {
+        std::vector<std::uintptr_t> out;
+        for (std::uintptr_t a = childrenStart; a + 8 <= childrenEnd + 1; a += stride) {
+            std::uintptr_t p = read_memory<std::uintptr_t>(a, handle);
+            if (p != 0 && p > 0x10000 && p < 0x00007FFFFFFFFFFFULL)
+                out.push_back(p);
         }
-    }
-    return children;
+        return out;
+    };
+    auto c16 = try_stride(0x10);
+    auto c8  = try_stride(0x8);
+    return (c8.size() > c16.size()) ? c8 : c16;
 }
 
 std::string functions::ReadRobloxString(std::uintptr_t address, HANDLE handle) {
@@ -245,7 +254,7 @@ void RBXClient::performBootstrapHijack() {
             std::string n, cn;
             try {
                 n = functions::ReadRobloxString(
-                    read_memory<std::uintptr_t>(addr + offsets::Name, handle), handle);
+                    read_memory<std::uintptr_t>(addr + offsets::Name(), handle), handle);
             } catch (...) {}
             try {
                 cn = functions::ReadRobloxString(
@@ -258,8 +267,8 @@ void RBXClient::performBootstrapHijack() {
         }
         if (children.empty()) {
             std::cerr << "[voidtrace] FAIL — DataModel has 0 children. "
-                         "Instance offsets (Children=0x" << std::hex << offsets::Children
-                      << " Name=0x" << offsets::Name << std::dec
+                         "Instance offsets (Children=0x" << std::hex << offsets::Children()
+                      << " Name=0x" << offsets::Name() << std::dec
                       << ") are likely wrong for this Roblox build.\n";
             return;
         }
