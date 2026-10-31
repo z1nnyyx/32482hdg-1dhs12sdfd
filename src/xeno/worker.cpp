@@ -23,8 +23,8 @@ std::vector<std::uintptr_t> functions::GetChildrenAddresses(std::uintptr_t addre
         return {};
 
     std::uintptr_t childrenStart = read_memory<std::uintptr_t>(childrenPtr, handle);
-    std::uintptr_t childrenEnd = read_memory<std::uintptr_t>(childrenPtr + 0x8, handle);
-    if (childrenEnd == 0 || childrenStart == 0 || childrenEnd <= childrenStart)
+    std::uintptr_t childrenEnd = read_memory<std::uintptr_t>(childrenPtr + 0x8, handle) + 1;
+    if (childrenEnd <= childrenStart || childrenStart == 0)
         return {};
     if ((childrenEnd - childrenStart) > 0x2000)
         return {};
@@ -33,7 +33,7 @@ std::vector<std::uintptr_t> functions::GetChildrenAddresses(std::uintptr_t addre
     // yields more valid children. Roblox builds vary.
     auto try_stride = [&](std::uintptr_t stride) {
         std::vector<std::uintptr_t> out;
-        for (std::uintptr_t a = childrenStart; a + 8 <= childrenEnd + 1; a += stride) {
+        for (std::uintptr_t a = childrenStart; a < childrenEnd; a += stride) {
             std::uintptr_t p = read_memory<std::uintptr_t>(a, handle);
             if (p != 0 && p > 0x10000 && p < 0x00007FFFFFFFFFFFULL)
                 out.push_back(p);
