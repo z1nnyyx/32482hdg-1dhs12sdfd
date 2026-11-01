@@ -930,101 +930,102 @@ uintptr_t World::discover_dm_by_string() {
         0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90, 0x98
     };
 
-    // Phase 2b: scan heap for pointers to our Players string objects
-    for (uintptr_t ps : players_strings) {
-        // Search nearby heap regions for 8-byte values == ps
-        // The pointer to the string object sits inside the Instance struct.
-        // We search a range of heap around ps (Instances are heap allocated nearby).
-        const uintptr_t search_lo = (ps > 0x100000) ? (ps - 0x100000) : 0x10000;
-        const uintptr_t search_hi = ps + 0x100000;
-        MEMORY_BASIC_INFORMATION mbi2{};
-        uintptr_t a2 = search_lo;
-        while (a2 < search_hi) {
-            if (!VirtualQueryEx(mem_.handle(), (LPCVOID)a2, &mbi2, sizeof(mbi2))) break;
-            const uintptr_t r2 = (uintptr_t)mbi2.RegionSize;
-            const uintptr_t n2 = (uintptr_t)mbi2.BaseAddress + r2;
-            if (n2 <= a2) break;
-            if (mbi2.State == MEM_COMMIT && r2 >= 0x1000 && r2 <= 0x800000 &&
-                (mbi2.Protect & (PAGE_READWRITE | PAGE_READONLY)))
-            {
-                std::vector<uint8_t> buf2(r2);
-                if (mem_.read((uintptr_t)mbi2.BaseAddress, buf2.data(), r2)) {
-                    for (size_t j = 0; j + 8 <= r2; j += 8) {
-                        const uintptr_t val = *(uintptr_t*)(buf2.data() + j);
-                        if (val != ps) continue;
-                        // Found a pointer to our "Players" string.
-                        // val is at address (mbi2.BaseAddress + j).
-                        // If this is Instance.Name, the Instance base is at
-                        // (mbi2.BaseAddress + j - name_offset).
-                        const uintptr_t ptr_addr = (uintptr_t)mbi2.BaseAddress + j;
-                        for (uintptr_t no : name_try) {
-                            if (ptr_addr < no) continue;
-                            const uintptr_t inst = ptr_addr - no;
-                            if (!mem_.looks(inst)) continue;
-                            // Check if this Instance has a Parent that looks like DM
-                            for (uintptr_t po : parent_try) {
-                                if (po == no) continue;
-                                const uintptr_t parent = mem_.read_ptr(inst + po);
-                                if (!mem_.looks(parent) || parent == inst) continue;
-                                // Check parent's children for breadth
-                                for (uintptr_t co : child_try) {
-                                    const uintptr_t cb = mem_.read_ptr(parent + co);
-                                    const uintptr_t ce = mem_.read_ptr(parent + co + 8);
-                                    if (!mem_.looks(cb) || !mem_.looks(ce) || ce <= cb)
-                                        continue;
-                                    const size_t cn = (ce - cb) / 8;
-                                    if (cn < 5 || cn > 100) continue;
-                                    // Count named children
-                                    int named = 0;
-                                    int known = 0;
-                                    for (uintptr_t it = cb; it + 8 <= ce && named < 30; it += 8) {
-                                        const uintptr_t ch = mem_.read_ptr(it);
-                                        if (!mem_.looks(ch)) continue;
-                                        auto nm = mem_.rstring(ch + no);
-                                        if (nm.empty()) {
-                                            const uintptr_t sp = mem_.read_ptr(ch + no);
-                                            nm = mem_.rstring(sp);
-                                        }
-                                        if (nm.empty()) continue;
-                                        ++named;
-                                        if (nm == "Players" || nm == "Workspace" ||
-                                            nm == "Lighting" || nm == "CoreGui" ||
-                                            nm == "StarterPlayer" || nm == "ReplicatedStorage" ||
-                                            nm == "StarterGui" || nm == "Teams" ||
-                                            nm == "StarterPack" || nm == "SoundService")
-                                            ++known;
-                                    }
-                                    if (known >= 3) {
-                                        VT_LOG(L"String-scan DataModel FOUND  dm=" +
-                                               format_hex(parent) +
-                                               L"  nameOff=" + format_hex(no) +
-                                               L"  childOff=" + format_hex(co) +
-                                               L"  parentOff=" + format_hex(po) +
-                                               L"  named=" + std::to_wstring(named) +
-                                               L"  known=" + std::to_wstring(known) +
-                                               L"  in " + std::to_wstring(GetTickCount() - t0) + L"ms");
-                                        // Cache discovered offsets for future use
-                                        g_name_off_hint.store(no, std::memory_order_relaxed);
-                                        g_name_reprobe.store(true, std::memory_order_relaxed);
-                                        {
-                                            auto& ot = Config::instance().get().offsets;
-                                            ot.name_off  = no;
-                                            ot.child_off = co;
-                                        }
-                                        return parent;
-                                    }
-                                }
-                            }
-                        }
+    // Phase 2a: direct approach — the "Players" SSO string IS at the
+    // string object base, so if Name is a pointer to the string object,
+    // search ALL heap for 8-byte values equal to any ps.
+    // Build a set of target addresses for fast lookup.
+    auto check_dm_candidate = [&](uintptr_t inst, uintptr_t no) -> uintptr_t {
+        if (!mem_.looks(inst)) return 0;
+        for (uintptr_t po : parent_try) {
+            if (po == no) continue;
+            const uintptr_t parent = mem_.read_ptr(inst + po);
+            if (!mem_.looks(parent) || parent == inst) continue;
+            for (uintptr_t co : child_try) {
+                const uintptr_t cb = mem_.read_ptr(parent + co);
+                const uintptr_t ce = mem_.read_ptr(parent + co + 8);
+                if (!mem_.looks(cb) || !mem_.looks(ce) || ce <= cb) continue;
+                const size_t cn = (ce - cb) / 8;
+                if (cn < 5 || cn > 100) continue;
+                int named = 0, known = 0;
+                for (uintptr_t it = cb; it + 8 <= ce && named < 30; it += 8) {
+                    const uintptr_t ch = mem_.read_ptr(it);
+                    if (!mem_.looks(ch)) continue;
+                    auto nm = mem_.rstring(ch + no);
+                    if (nm.empty()) {
+                        const uintptr_t sp = mem_.read_ptr(ch + no);
+                        nm = mem_.rstring(sp);
+                    }
+                    if (nm.empty()) continue;
+                    ++named;
+                    if (nm == "Players" || nm == "Workspace" ||
+                        nm == "Lighting" || nm == "CoreGui" ||
+                        nm == "StarterPlayer" || nm == "ReplicatedStorage" ||
+                        nm == "StarterGui" || nm == "Teams" ||
+                        nm == "StarterPack" || nm == "SoundService")
+                        ++known;
+                }
+                if (known >= 3) {
+                    VT_LOG(L"String-scan DataModel FOUND  dm=" + format_hex(parent) +
+                           L"  nameOff=" + format_hex(no) +
+                           L"  childOff=" + format_hex(co) +
+                           L"  parentOff=" + format_hex(po) +
+                           L"  named=" + std::to_wstring(named) +
+                           L"  known=" + std::to_wstring(known) +
+                           L"  in " + std::to_wstring(GetTickCount() - t0) + L"ms");
+                    g_name_off_hint.store(no, std::memory_order_relaxed);
+                    g_name_reprobe.store(true, std::memory_order_relaxed);
+                    {
+                        auto& ot = Config::instance().get().offsets;
+                        ot.name_off  = no;
+                        ot.child_off = co;
+                    }
+                    return parent;
+                }
+            }
+        }
+        return 0;
+    };
+
+    // Phase 2b: scan ALL readable heap for pointers to any Players string
+    VT_LOG(L"String scan phase 2: searching all heap for pointers to " +
+           std::to_wstring(players_strings.size()) + L" candidates");
+    MEMORY_BASIC_INFORMATION mbi2{};
+    uintptr_t a2 = 0x10000;
+    while (a2 < 0x00007FFFFFFEFFFFULL) {
+        if (GetTickCount() - t0 > 20000) {
+            VT_WARN(L"String-scan timeout at 20s");
+            return 0;
+        }
+        if (!VirtualQueryEx(mem_.handle(), (LPCVOID)a2, &mbi2, sizeof(mbi2))) break;
+        const uintptr_t r2 = (uintptr_t)mbi2.RegionSize;
+        const uintptr_t n2 = (uintptr_t)mbi2.BaseAddress + r2;
+        if (n2 <= a2) break;
+        if (mbi2.State == MEM_COMMIT && r2 >= 0x1000 && r2 <= 0x800000 &&
+            (mbi2.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READ |
+                             PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY)) &&
+            !((uintptr_t)mbi2.BaseAddress >= base_ &&
+              (uintptr_t)mbi2.BaseAddress < base_ + size_))
+        {
+            std::vector<uint8_t> buf2(r2);
+            if (mem_.read((uintptr_t)mbi2.BaseAddress, buf2.data(), r2)) {
+                for (size_t j = 0; j + 8 <= r2; j += 8) {
+                    const uintptr_t val = *(uintptr_t*)(buf2.data() + j);
+                    bool match = false;
+                    for (uintptr_t ps : players_strings) {
+                        if (val == ps) { match = true; break; }
+                    }
+                    if (!match) continue;
+                    const uintptr_t ptr_addr = (uintptr_t)mbi2.BaseAddress + j;
+                    for (uintptr_t no : name_try) {
+                        if (ptr_addr < no) continue;
+                        const uintptr_t inst = ptr_addr - no;
+                        uintptr_t dm = check_dm_candidate(inst, no);
+                        if (dm) return dm;
                     }
                 }
             }
-            if (GetTickCount() - t0 > 15000) {
-                VT_WARN(L"String-scan timeout at 15s");
-                return 0;
-            }
-            a2 = n2;
         }
+        a2 = n2;
     }
     VT_WARN(L"String-scan found no DataModel after " +
             std::to_wstring(GetTickCount() - t0) + L"ms");
