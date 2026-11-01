@@ -31,10 +31,10 @@ namespace {
 const uintptr_t kFakeDm[]   = { 0x682B928, 0x67D0C18, 0x8CA9CC8, 0x8B79B58, 0x7A8F908, 0x7A8F910 };
 const uintptr_t kFakeOff[]  = { 0x1B8, 0x1F8, 0x1D8, 0x1C0, 0x1E0 };
 const uintptr_t kVeRva[]    = { 0x66712A8, 0x8136228, 0x763D3D0, 0x7B2EE10 };
-const uintptr_t kChildOff[] = { 0x80, 0x78, 0x70, 0x68, 0x60, 0x88 };
+const uintptr_t kChildOff[] = { 0x70, 0x80, 0x78, 0x68, 0x60, 0x88 };
 const uintptr_t kNameOff[]  = {
-    0x78, 0xB0, 0x70, 0x48, 0x50, 0x88, 0x90, 0x98, 0xA0, 0xA8,
-    0x28, 0x30, 0x38, 0x40, 0x58, 0x60, 0x68, 0x80, 0xB8, 0xC0,
+    0x68, 0x78, 0xB0, 0x70, 0x48, 0x50, 0x88, 0x90, 0x98, 0xA0, 0xA8,
+    0x28, 0x30, 0x38, 0x40, 0x58, 0x60, 0x80, 0xB8, 0xC0,
     0xC8, 0xD0, 0xD8, 0xE0, 0xE8, 0xF0, 0x08, 0x10, 0x18, 0x20,
     0x100, 0x108, 0x110, 0x118, 0x120, 0x128, 0x130, 0x138, 0x140, 0x148
 };
@@ -797,6 +797,7 @@ uintptr_t World::discover_datamodel() {
         return 0;
     dm_scan_done_ = true;
     last_dm_check_ = now;
+    const DWORD t0 = GetTickCount();
     auto cheap = [&](uintptr_t dm) {
         if (!mem_.looks(dm))
             return false;
@@ -834,7 +835,7 @@ uintptr_t World::discover_datamodel() {
                         continue;
                     if (fake >= base_ && fake < end)
                         continue;
-                    if (++tries > 300000)
+                    if (++tries > 300000 || (tries % 5000 == 0 && GetTickCount() - t0 > 8000))
                         goto done;
                     for (uintptr_t fo : foffs) {
                         const uintptr_t dm = fo ? mem_.read_ptr(fake + fo) : fake;
@@ -884,7 +885,7 @@ uintptr_t World::discover_dm_by_string() {
             (mbi.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READ |
                             PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY));
         // Skip module pages and tiny/huge regions
-        if (rw && rsz >= 0x1000 && rsz <= 0x4000000 &&
+        if (rw && rsz >= 0x1000 && rsz <= 0x800000 &&
             !((uintptr_t)mbi.BaseAddress >= base_ &&
               (uintptr_t)mbi.BaseAddress < base_ + size_))
         {
@@ -943,7 +944,7 @@ uintptr_t World::discover_dm_by_string() {
             const uintptr_t r2 = (uintptr_t)mbi2.RegionSize;
             const uintptr_t n2 = (uintptr_t)mbi2.BaseAddress + r2;
             if (n2 <= a2) break;
-            if (mbi2.State == MEM_COMMIT && r2 >= 0x1000 && r2 <= 0x4000000 &&
+            if (mbi2.State == MEM_COMMIT && r2 >= 0x1000 && r2 <= 0x800000 &&
                 (mbi2.Protect & (PAGE_READWRITE | PAGE_READONLY)))
             {
                 std::vector<uint8_t> buf2(r2);

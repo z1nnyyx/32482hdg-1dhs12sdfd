@@ -24,9 +24,9 @@ namespace vt {
 namespace inst_offsets {
     constexpr std::uint64_t This = 0x8;
 
-    inline std::uint64_t& Name_mut()     { static std::uint64_t v = 0x78; return v; }
-    inline std::uint64_t& Children_mut() { static std::uint64_t v = 0x80; return v; }
-    inline std::uint64_t& Parent_mut()   { static std::uint64_t v = 0x50; return v; }
+    inline std::uint64_t& Name_mut()     { static std::uint64_t v = 0x68; return v; }
+    inline std::uint64_t& Children_mut() { static std::uint64_t v = 0x70; return v; }
+    inline std::uint64_t& Parent_mut()   { static std::uint64_t v = 0x40; return v; }
 
     inline std::uint64_t Name()     { return Name_mut(); }
     inline std::uint64_t Children() { return Children_mut(); }
