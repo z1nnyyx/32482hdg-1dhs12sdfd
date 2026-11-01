@@ -4,6 +4,6 @@
 IDR_VT_MODULE RCDATA "VoidTrace.dll"
 IDR_VT_LOGO   RCDATA "logo.png"
 
-// Xeno external-mode bootstrap: compiled to bytecode in-process and
-// written into Roblox via `vt::xeno::start()`. See src/xeno/XenoMode.h.
+// VoidTrace bootstrap: compiled to bytecode in-process and written
+// into Roblox via the native Executor. See src/core/Executor.h.
 SCRIPT        LUAFILE "../xeno/client.lua"

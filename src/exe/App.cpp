@@ -16,7 +16,7 @@
 #include "shared/Log.h"
 #include "shared/PipeKey.h"
 #include "shared/Utils.h"
-#include "xeno/XenoMode.h"
+#include "core/Executor.h"
 
 #include <CommDlg.h>
 #include <psapi.h>
@@ -901,11 +901,8 @@ static void do_deferred_init() {
     g_init_step = 4; scan_cfg_gadget();
     g_init_step = 5; Payload::seed();
     g_init_step = 6; Config::instance().load(data_root() / L"config" / L"offsets.json");
-    // External execution backend (Xeno-style). Non-fatal if it fails to
-    // bind the httplib port — do_execute() falls back to the internal
-    // manual-map DLL path automatically.
-    try { vt::xeno::start(); VT_LOG(L"voidtrace: external backend online"); }
-    catch (...) { VT_WARN(L"voidtrace: start() threw — external mode disabled"); }
+    // Native executor (no Xeno). Initialized on first attach, not here.
+    VT_LOG(L"voidtrace: executor module ready");
     auto& cfg = Config::instance().get();
     cfg.auto_attach = false;
     g_auto_attach = false;
@@ -1135,21 +1132,17 @@ void start_ext_esp() {
     VT_LOG(L"overlay ESP on  " + std::wstring(st.note));
     notify(L"Runtime", L"ESP on the game window — not in F9. Lua hubs cannot run in-game.");
 
-    // Feed the xeno backend our already-resolved DataModel so it can
-    // skip its (now-broken) log-scrape path. Current Roblox builds no
-    // longer print the SurfaceController::initialize-view line GetRV
-    // depends on, so without this the Xeno RBXClient bails before
-    // writing any bytecode.
-    if (vt::xeno::is_running() && g_rbx) {
+    // Attach the native executor using the overlay's resolved DataModel.
+    if (g_rbx) {
         auto dm = ov.data_model();
         if (dm != 0) {
-            const bool ok = vt::xeno::seed_client_with_dm(
+            const bool ok = vt::Executor::instance().attach(
                 static_cast<std::uint32_t>(g_rbx->pid),
                 static_cast<std::uintptr_t>(dm));
-            VT_LOG(L"voidtrace: seed via overlay DM=0x" + format_hex(dm) +
+            VT_LOG(L"voidtrace: attach via overlay DM=0x" + format_hex(dm) +
                    (ok ? L" OK" : L" FAIL"));
         } else {
-            VT_WARN(L"voidtrace: overlay has no DataModel yet — xeno attach deferred");
+            VT_WARN(L"voidtrace: overlay has no DataModel yet — attach deferred");
         }
     }
 }
@@ -1776,8 +1769,8 @@ void do_attach() {
         return;
     }
 
-    if (vt::xeno::is_running()) {
-        const auto rows = vt::xeno::clients();
+    {
+        const auto rows = vt::Executor::instance().clients();
         if (!rows.empty()) {
             set_progress(100, L"Attached");
             std::wstring who;
@@ -1791,7 +1784,6 @@ void do_attach() {
             notify(L"Runtime", L"Attached · " + who);
             VT_LOG(L"voidtrace: attached — " +
                    std::to_wstring(rows.size()) + L" client(s)");
-            // In-game bottom-right chip
             ext::Overlay::instance().set_status(true, who_utf8, "live");
             return;
         }
@@ -1824,13 +1816,12 @@ void do_execute() {
     }
     const std::wstring nm = (g_cur >= 0 && g_cur < (int)g_docs.size()) ? g_docs[g_cur].name : L"script";
 
-    if (vt::xeno::is_running()) {
-        const auto rows = vt::xeno::clients();
+    {
+        const auto rows = vt::Executor::instance().clients();
         if (!rows.empty()) {
             const std::size_t sent =
-                vt::xeno::execute(expand_loadstring_http(raw));
+                vt::Executor::instance().execute(expand_loadstring_http(raw));
             if (sent > 0) {
-                // Build a client-list string so the UI shows WHO received it.
                 std::wstring who;
                 for (const auto& r : rows) {
                     if (!who.empty()) who += L", ";
@@ -2805,20 +2796,17 @@ LRESULT CALLBACK wndproc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (wp == 2) {
             persist_tabs();
-            // Opportunistic xeno seeding: if the overlay has resolved
-            // the DataModel after the initial attach (e.g. the user
-            // just joined a game, or World retried past a Hyperion
-            // scrambled window), seed the xeno client now so Execute
-            // works without a manual re-attach.
-            if (vt::xeno::is_running() && g_rbx &&
-                vt::xeno::clients().empty())
+            // Opportunistic attach: if the overlay has resolved the
+            // DataModel after the initial attach, seed the executor
+            // now so Execute works without a manual re-attach.
+            if (g_rbx && vt::Executor::instance().clients().empty())
             {
                 auto dm = ext::Overlay::instance().data_model();
                 if (dm != 0) {
-                    const bool ok = vt::xeno::seed_client_with_dm(
+                    const bool ok = vt::Executor::instance().attach(
                         static_cast<std::uint32_t>(g_rbx->pid),
                         static_cast<std::uintptr_t>(dm));
-                    VT_LOG(L"voidtrace: retry seed DM=" + format_hex(dm) +
+                    VT_LOG(L"voidtrace: retry attach DM=" + format_hex(dm) +
                            (ok ? L" OK" : L" FAIL"));
                 }
             }
