@@ -62,7 +62,7 @@ bool write_mem(std::uintptr_t address, const T& value, HANDLE handle) {
     VirtualProtectEx(handle, reinterpret_cast<LPVOID>(address),
                      sizeof(T), PAGE_READWRITE, &old_protect);
 
-    ULONG written = 0;
+    SIZE_T written = 0;
     NTSTATUS status = NtWriteVirtualMemory(
         handle, reinterpret_cast<LPVOID>(address),
         (PVOID)&value, sizeof(T), &written);
