@@ -884,21 +884,24 @@ uintptr_t World::discover_dm_by_string() {
         bool rw = mbi.State == MEM_COMMIT &&
             (mbi.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READ |
                             PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY));
-        // Skip module pages and tiny/huge regions
-        if (rw && rsz >= 0x1000 && rsz <= 0x800000 &&
+        // Skip module pages and tiny regions; read large regions in chunks
+        if (rw && rsz >= 0x1000 &&
             !((uintptr_t)mbi.BaseAddress >= base_ &&
               (uintptr_t)mbi.BaseAddress < base_ + size_))
         {
-            std::vector<uint8_t> buf(rsz);
-            if (mem_.read((uintptr_t)mbi.BaseAddress, buf.data(), rsz)) {
-                for (size_t i = 0; i + 32 <= rsz; ++i) {
+            const size_t chunk = 0x400000; // 4MB chunks
+            for (size_t off = 0; off < rsz && players_strings.size() < 200; off += chunk) {
+                const size_t toread = (std::min)(chunk + 32, rsz - off);
+                std::vector<uint8_t> buf(toread);
+                if (!mem_.read((uintptr_t)mbi.BaseAddress + off, buf.data(), toread))
+                    continue;
+                for (size_t i = 0; i + 32 <= toread; ++i) {
                     if (memcmp(buf.data() + i, needle, needle_len + 1) == 0) {
-                        // Verify MSVC small string: sz at +0x10 == 7, cap at +0x18 < 16
-                        if (i + 0x20 <= rsz) {
+                        if (i + 0x20 <= toread) {
                             const size_t sz  = *(size_t*)(buf.data() + i + 0x10);
                             const size_t cap = *(size_t*)(buf.data() + i + 0x18);
                             if (sz == needle_len && cap >= needle_len && cap < 16) {
-                                players_strings.push_back((uintptr_t)mbi.BaseAddress + i);
+                                players_strings.push_back((uintptr_t)mbi.BaseAddress + off + i);
                             }
                         }
                     }
@@ -1000,22 +1003,27 @@ uintptr_t World::discover_dm_by_string() {
         const uintptr_t r2 = (uintptr_t)mbi2.RegionSize;
         const uintptr_t n2 = (uintptr_t)mbi2.BaseAddress + r2;
         if (n2 <= a2) break;
-        if (mbi2.State == MEM_COMMIT && r2 >= 0x1000 && r2 <= 0x800000 &&
+        if (mbi2.State == MEM_COMMIT && r2 >= 0x1000 &&
             (mbi2.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READ |
                              PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY)) &&
             !((uintptr_t)mbi2.BaseAddress >= base_ &&
               (uintptr_t)mbi2.BaseAddress < base_ + size_))
         {
-            std::vector<uint8_t> buf2(r2);
-            if (mem_.read((uintptr_t)mbi2.BaseAddress, buf2.data(), r2)) {
-                for (size_t j = 0; j + 8 <= r2; j += 8) {
+            const size_t chunk = 0x400000;
+            for (size_t off = 0; off < r2; off += chunk) {
+                if (GetTickCount() - t0 > 20000) break;
+                const size_t toread = (std::min)(chunk, r2 - off);
+                std::vector<uint8_t> buf2(toread);
+                if (!mem_.read((uintptr_t)mbi2.BaseAddress + off, buf2.data(), toread))
+                    continue;
+                for (size_t j = 0; j + 8 <= toread; j += 8) {
                     const uintptr_t val = *(uintptr_t*)(buf2.data() + j);
                     bool match = false;
                     for (uintptr_t ps : players_strings) {
                         if (val == ps) { match = true; break; }
                     }
                     if (!match) continue;
-                    const uintptr_t ptr_addr = (uintptr_t)mbi2.BaseAddress + j;
+                    const uintptr_t ptr_addr = (uintptr_t)mbi2.BaseAddress + off + j;
                     for (uintptr_t no : name_try) {
                         if (ptr_addr < no) continue;
                         const uintptr_t inst = ptr_addr - no;
