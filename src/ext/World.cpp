@@ -1257,39 +1257,16 @@ uintptr_t World::discover_dm_by_string() {
            L" StarterGui=" + std::to_wstring(counts[5]) +
            L") in " + std::to_wstring(GetTickCount() - t0) + L"ms");
 
-    // Build target address list for Phase 2 pointer scanning.
-    // KEY INSIGHT (Grok round 3): The Instance's Name field does NOT point
-    // at the raw character data — it points at a string OBJECT HEADER that
-    // precedes the characters. So when we find "Players" at address X, the
-    // Name field actually points to X-8, X-16, X-24, or X-32. We must scan
-    // for pointers to ALL of these, not just X.
-    struct PtrTarget { uintptr_t addr; int needle_idx; };
-    std::vector<PtrTarget> ptr_targets;
-    ptr_targets.reserve(string_hits.size() * 5);
-    for (auto& h : string_hits) {
-        // Direct pointer to char data (maybe SSO inline = object base)
-        ptr_targets.push_back({h.addr, h.needle_idx});
-        // String object header variants (header before char data)
-        for (int hdr_off = 8; hdr_off <= 32; hdr_off += 8) {
-            if (h.addr >= (uintptr_t)hdr_off)
-                ptr_targets.push_back({h.addr - hdr_off, h.needle_idx});
-        }
-    }
-    // Also keep flat list for backwards compat
-    std::vector<uintptr_t> players_strings;
-    for (auto& h : string_hits)
-        players_strings.push_back(h.addr);
-    if (ptr_targets.empty()) return 0;
+    // ---------------------------------------------------------------
+    // Phase 1.5 — DIRECT INLINE SSO
+    // For SSO strings (≤15 chars), the char data lives INLINE at
+    // Instance + nameOff. There is NO pointer to find — the string
+    // IS part of the Instance object. So: Instance = char_addr - nameOff.
+    // This is the highest-leverage approach for short names like
+    // "Players" (7), "Workspace" (9), "Lighting" (8), "CoreGui" (7).
+    // ---------------------------------------------------------------
+    VT_LOG(L"Phase 1.5: direct SSO inline — treating char data as Instance+nameOff");
 
-    VT_LOG(L"String scan: " + std::to_wstring(ptr_targets.size()) +
-           L" pointer targets (with header offsets) from " +
-           std::to_wstring(string_hits.size()) + L" char hits");
-
-    // Phase 2: for each "Players" string, search heap for Instance objects
-    // that point to it. The Instance has a Name field at some offset that
-    // holds a pointer to this string object.
-    // Try name offsets: we read 0x200 bytes around each potential Instance
-    // and check which offset points to our string.
     const uintptr_t name_try[] = {
         0x28, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70,
         0x78, 0x80, 0x88, 0x90, 0x98, 0xA0, 0xA8, 0xB0, 0xB8, 0xC0
@@ -1301,11 +1278,10 @@ uintptr_t World::discover_dm_by_string() {
         0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90, 0x98
     };
 
-    // Phase 2a: direct approach — the "Players" SSO string IS at the
-    // string object base, so if Name is a pointer to the string object,
-    // search ALL heap for 8-byte values equal to any ps.
-    // Build a set of target addresses for fast lookup.
-    auto check_dm_candidate = [&](uintptr_t inst, uintptr_t no) -> uintptr_t {
+    // Helper: given a candidate Instance addr and name offset, walk
+    // Parent up to DataModel checking children names
+    auto check_dm_from_inst = [&](uintptr_t inst, uintptr_t no,
+                                   const char* which) -> uintptr_t {
         if (!mem_.looks(inst)) return 0;
         for (uintptr_t po : parent_try) {
             if (po == no) continue;
@@ -1321,8 +1297,10 @@ uintptr_t World::discover_dm_by_string() {
                 for (uintptr_t it = cb; it + 8 <= ce && named < 30; it += 8) {
                     const uintptr_t ch = mem_.read_ptr(it);
                     if (!mem_.looks(ch)) continue;
+                    // Try reading name as inline SSO at ch+no
                     auto nm = mem_.rstring(ch + no);
                     if (nm.empty()) {
+                        // Maybe heap-allocated: deref pointer at ch+no
                         const uintptr_t sp = mem_.read_ptr(ch + no);
                         nm = mem_.rstring(sp);
                     }
@@ -1336,7 +1314,9 @@ uintptr_t World::discover_dm_by_string() {
                         ++known;
                 }
                 if (known >= 3) {
-                    VT_LOG(L"String-scan DataModel FOUND  dm=" + format_hex(parent) +
+                    VT_LOG(L"Phase 1.5 DataModel FOUND  dm=" + format_hex(parent) +
+                           L"  via " + utf8_to_wide(which) +
+                           L"  inst=" + format_hex(inst) +
                            L"  nameOff=" + format_hex(no) +
                            L"  childOff=" + format_hex(co) +
                            L"  parentOff=" + format_hex(po) +
@@ -1355,6 +1335,45 @@ uintptr_t World::discover_dm_by_string() {
             }
         }
         return 0;
+    };
+
+    for (auto& hit : string_hits) {
+        if (GetTickCount() - t0 > 15000) break;
+        for (uintptr_t no : name_try) {
+            if (hit.addr < no) continue;
+            const uintptr_t inst = hit.addr - no;
+            uintptr_t dm = check_dm_from_inst(inst, no, needles[hit.needle_idx].text);
+            if (dm) return dm;
+        }
+    }
+    VT_LOG(L"Phase 1.5: no DataModel from inline SSO, trying pointer scan");
+
+    // ---------------------------------------------------------------
+    // Phase 2 pointer scanning (for non-SSO / header-indirect names)
+    // ---------------------------------------------------------------
+    // Build target address list including header offset variants
+    struct PtrTarget { uintptr_t addr; int needle_idx; };
+    std::vector<PtrTarget> ptr_targets;
+    ptr_targets.reserve(string_hits.size() * 5);
+    for (auto& h : string_hits) {
+        ptr_targets.push_back({h.addr, h.needle_idx});
+        for (int hdr_off = 8; hdr_off <= 32; hdr_off += 8) {
+            if (h.addr >= (uintptr_t)hdr_off)
+                ptr_targets.push_back({h.addr - hdr_off, h.needle_idx});
+        }
+    }
+    std::vector<uintptr_t> players_strings;
+    for (auto& h : string_hits)
+        players_strings.push_back(h.addr);
+    if (ptr_targets.empty()) return 0;
+
+    VT_LOG(L"String scan: " + std::to_wstring(ptr_targets.size()) +
+           L" pointer targets (with header offsets) from " +
+           std::to_wstring(string_hits.size()) + L" char hits");
+
+    // Reuse the Phase 1.5 validator for pointer-based phases
+    auto check_dm_candidate = [&](uintptr_t inst, uintptr_t no) -> uintptr_t {
+        return check_dm_from_inst(inst, no, "ptr-scan");
     };
 
     // Phase 2a (fast): for each string hit + header variants, scan ±64KB
