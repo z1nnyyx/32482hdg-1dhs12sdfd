@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <functional>
 #include <initializer_list>
 #include <unordered_set>
 #include <vector>
@@ -1029,7 +1030,8 @@ uintptr_t World::discover_dm_by_lua_rip() {
     };
 
     // Scan a code buffer for RIP-relative targets and E8 CALL targets
-    auto scan_code = [&](uintptr_t fn_addr, const uint8_t* code, int len, bool follow_calls) {
+    std::function<void(uintptr_t, const uint8_t*, int, bool)> scan_code =
+    [&](uintptr_t fn_addr, const uint8_t* code, int len, bool follow_calls) {
         for (int i = 0; i + 7 <= len; ++i) {
             const uint8_t b0 = code[i];
 
