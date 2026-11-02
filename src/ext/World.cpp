@@ -857,22 +857,198 @@ uintptr_t World::discover_datamodel() {
         addr = next;
     }
 done:
-    VT_WARN(L"DataModel scan miss (pointer-based) — trying string-based scan");
+    VT_WARN(L"DataModel scan miss (pointer-based) — trying Lua RIP-relative scan");
+    if (auto dm = discover_dm_by_lua_rip())
+        return dm;
+    VT_WARN(L"Lua RIP scan miss — trying multi-string scan");
     return discover_dm_by_string();
+}
+
+// ---------------------------------------------------------------------------
+// Lua RIP-relative scanner (Grok method #1)
+// For each known Lua function RVA, read 256 bytes of code and scan for
+// RIP-relative mov/lea patterns:  48 8B 0D xx xx xx xx  (mov rcx, [rip+disp32])
+//                                 48 8B 05 xx xx xx xx  (mov rax, [rip+disp32])
+//                                 48 8D 0D xx xx xx xx  (lea rcx, [rip+disp32])
+//                                 48 8D 05 xx xx xx xx  (lea rax, [rip+disp32])
+//                                 4C 8B 05/0D/15/1D/25/2D/35/3D  (mov r8-r15, ...)
+// Resolve each target address. Dereference once to get a heap pointer.
+// Walk possible Instance layouts looking for DataModel services.
+// ---------------------------------------------------------------------------
+uintptr_t World::discover_dm_by_lua_rip() {
+    if (!mem_.handle() || !base_ || !size_)
+        return 0;
+    const auto& tbl = off();
+    const DWORD t0 = GetTickCount();
+
+    // Collect all non-zero Lua function RVAs
+    const uintptr_t rvas[] = {
+        tbl.lua_gettop, tbl.lua_pcall, tbl.luau_load, tbl.lua_newthread,
+        tbl.lua_pushstring, tbl.lua_pushlstring, tbl.lua_pushcclosure,
+        tbl.lua_tolstring, tbl.lua_getfield, tbl.lua_setfield,
+        tbl.lua_getglobal, tbl.lua_setglobal, tbl.lua_settop,
+        tbl.lua_type, tbl.lua_pushnil, tbl.lua_pushnumber,
+        tbl.lua_pushboolean, tbl.lua_pushvalue, tbl.lua_rawgeti,
+        tbl.lua_settable, tbl.lua_gettable, tbl.lua_createtable,
+        tbl.lua_newuserdata, tbl.lua_setmetatable, tbl.lua_next,
+        tbl.lua_pushthread, tbl.lua_xmove,
+    };
+
+    // Collect unique resolved target addresses from RIP-relative instructions
+    std::vector<uintptr_t> targets;
+    targets.reserve(256);
+    int funcs_scanned = 0;
+
+    auto add_unique = [&](uintptr_t t) {
+        if (!mem_.looks(t)) return;
+        for (uintptr_t x : targets)
+            if (x == t) return;
+        targets.push_back(t);
+    };
+
+    for (uintptr_t rva : rvas) {
+        if (!rva) continue;
+        const uintptr_t fn_addr = base_ + rva;
+        uint8_t code[256]{};
+        if (!mem_.read(fn_addr, code, sizeof(code)))
+            continue;
+        ++funcs_scanned;
+
+        for (int i = 0; i + 7 <= 256; ++i) {
+            // REX.W prefix: 48 or 4C
+            const uint8_t rex = code[i];
+            if (rex != 0x48 && rex != 0x4C)
+                continue;
+            const uint8_t op = code[i + 1];
+            // 8B = mov reg, [rip+disp32]    8D = lea reg, [rip+disp32]
+            if (op != 0x8B && op != 0x8D)
+                continue;
+            const uint8_t modrm = code[i + 2];
+            // ModRM: mod=00, r/m=101 (RIP-relative) → modrm & 0xC7 == 0x05
+            if ((modrm & 0xC7) != 0x05)
+                continue;
+
+            // disp32 at code[i+3..i+6]
+            int32_t disp = *(int32_t*)(code + i + 3);
+            uintptr_t target = fn_addr + i + 7 + disp;  // RIP = fn_addr + i + 7
+
+            // Target should be in the module's address range (data section)
+            if (target >= base_ && target < base_ + size_) {
+                add_unique(target);
+                // Also dereference once — the .data slot might hold a pointer
+                uintptr_t deref = mem_.read_ptr(target);
+                add_unique(deref);
+            }
+        }
+    }
+    VT_LOG(L"Lua RIP scan: " + std::to_wstring(funcs_scanned) + L" functions, " +
+           std::to_wstring(targets.size()) + L" unique targets");
+
+    if (targets.empty()) return 0;
+
+    // For each target, try to interpret it as:
+    // a) Direct DataModel pointer
+    // b) A structure containing a pointer to DataModel at various offsets
+    // c) A ScriptContext or similar that has a Parent chain leading to DataModel
+    uintptr_t best_dm = 0;
+    int best_score = 0;
+
+    auto try_dm = [&](uintptr_t cand) {
+        if (!mem_.looks(cand) || (cand & 7)) return;
+        int s = place_score(cand);
+        if (s > best_score) {
+            best_score = s;
+            best_dm = cand;
+        }
+    };
+
+    // Structure offsets to try for DataModel pointer
+    const uintptr_t dm_off[] = {
+        0, 8, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48,
+        0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90, 0x98,
+        0xA0, 0xA8, 0xB0, 0xB8, 0xC0, 0xC8, 0xD0, 0xD8, 0xE0, 0xE8,
+        0xF0, 0xF8, 0x100, 0x108, 0x110, 0x118, 0x120, 0x128, 0x130,
+        0x138, 0x140, 0x148, 0x150, 0x158, 0x160, 0x168, 0x170, 0x178,
+        0x180, 0x188, 0x190, 0x198, 0x1A0, 0x1A8, 0x1B0, 0x1B8,
+        0x1C0, 0x1C8, 0x1D0, 0x1D8, 0x1E0, 0x1E8, 0x1F0, 0x1F8,
+        0x200, 0x208, 0x210, 0x218, 0x220, 0x228, 0x230, 0x238,
+    };
+
+    for (uintptr_t t : targets) {
+        if (GetTickCount() - t0 > 6000) break;
+        // Direct check
+        try_dm(t);
+        if (best_score >= 80) goto found;
+
+        // t might be a pointer to a structure; dereference and probe
+        if (mem_.looks(t)) {
+            for (uintptr_t doff : dm_off) {
+                uintptr_t p = mem_.read_ptr(t + doff);
+                try_dm(p);
+                if (best_score >= 80) goto found;
+            }
+
+            // Walk Parent chain: if t is an Instance, walk Parent until
+            // we hit something that looks like DataModel
+            for (int depth = 0; depth < 10; ++depth) {
+                uintptr_t parent = 0;
+                for (uintptr_t po : { 0x40ull, 0x48ull, 0x50ull, 0x38ull }) {
+                    uintptr_t pp = mem_.read_ptr(t + po);
+                    if (mem_.looks(pp) && pp != t) {
+                        parent = pp;
+                        break;
+                    }
+                }
+                if (!parent || parent == t) break;
+                try_dm(parent);
+                if (best_score >= 80) goto found;
+                t = parent;
+            }
+        }
+    }
+
+found:
+    if (best_dm && best_score >= 80) {
+        VT_LOG(L"Lua RIP scan: DataModel FOUND  dm=" + format_hex(best_dm) +
+               L"  score=" + std::to_wstring(best_score) +
+               L"  in " + std::to_wstring(GetTickCount() - t0) + L"ms");
+        return best_dm;
+    }
+    if (best_dm && best_score > 0) {
+        VT_WARN(L"Lua RIP scan: best candidate dm=" + format_hex(best_dm) +
+                L" score=" + std::to_wstring(best_score) + L" (too low)");
+    }
+    VT_WARN(L"Lua RIP scan: no DataModel found (" +
+            std::to_wstring(targets.size()) + L" targets probed in " +
+            std::to_wstring(GetTickCount() - t0) + L"ms)");
+    return 0;
 }
 
 uintptr_t World::discover_dm_by_string() {
     if (!mem_.handle())
         return 0;
-    VT_LOG(L"String-based DataModel scan starting");
+    VT_LOG(L"Multi-string DataModel scan starting");
     const DWORD t0 = GetTickCount();
 
-    // Phase 1: scan ALL committed heap pages for inline "Players\0"
-    // MSVC small-string: data starts at the string object base, 7 chars + NUL
-    const char needle[] = "Players";
-    const size_t needle_len = 7;
-    std::vector<uintptr_t> players_strings;
-    players_strings.reserve(64);
+    // Phase 1: scan ALL committed heap for multiple service name SSO strings
+    // MSVC small-string optimisation: strings ≤15 chars are stored inline
+    // starting at the string object base, with size at +0x10, capacity at +0x18.
+    struct Needle {
+        const char* text;
+        size_t len;
+    };
+    const Needle needles[] = {
+        {"Players",    7},
+        {"Workspace",  9},
+        {"Lighting",   8},
+        {"CoreGui",    7},
+        {"RunService", 10},
+        {"StarterGui", 10},
+    };
+    // Store each hit with which needle it matched
+    struct StringHit { uintptr_t addr; int needle_idx; };
+    std::vector<StringHit> string_hits;
+    string_hits.reserve(256);
 
     MEMORY_BASIC_INFORMATION mbi{};
     uintptr_t addr = 0x10000;
@@ -884,37 +1060,52 @@ uintptr_t World::discover_dm_by_string() {
         bool rw = mbi.State == MEM_COMMIT &&
             (mbi.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READ |
                             PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY));
-        // Skip module pages and tiny regions; read large regions in chunks
         if (rw && rsz >= 0x1000 &&
             !((uintptr_t)mbi.BaseAddress >= base_ &&
               (uintptr_t)mbi.BaseAddress < base_ + size_))
         {
-            const size_t chunk = 0x400000; // 4MB chunks
-            for (size_t off = 0; off < rsz && players_strings.size() < 200; off += chunk) {
+            const size_t chunk = 0x400000;
+            for (size_t off = 0; off < rsz && string_hits.size() < 600; off += chunk) {
                 const size_t toread = (std::min)(chunk + 32, rsz - off);
                 std::vector<uint8_t> buf(toread);
                 if (!mem_.read((uintptr_t)mbi.BaseAddress + off, buf.data(), toread))
                     continue;
                 for (size_t i = 0; i + 32 <= toread; ++i) {
-                    if (memcmp(buf.data() + i, needle, needle_len + 1) == 0) {
-                        if (i + 0x20 <= toread) {
-                            const size_t sz  = *(size_t*)(buf.data() + i + 0x10);
-                            const size_t cap = *(size_t*)(buf.data() + i + 0x18);
-                            if (sz == needle_len && cap >= needle_len && cap < 16) {
-                                players_strings.push_back((uintptr_t)mbi.BaseAddress + off + i);
-                            }
+                    for (int ni = 0; ni < (int)std::size(needles); ++ni) {
+                        const auto& n = needles[ni];
+                        if (i + n.len + 1 > toread) continue;
+                        if (memcmp(buf.data() + i, n.text, n.len + 1) != 0) continue;
+                        if (i + 0x20 > toread) continue;
+                        const size_t sz  = *(size_t*)(buf.data() + i + 0x10);
+                        const size_t cap = *(size_t*)(buf.data() + i + 0x18);
+                        if (sz == n.len && cap >= n.len && cap < 16) {
+                            string_hits.push_back({(uintptr_t)mbi.BaseAddress + off + i, ni});
                         }
                     }
-                    if (players_strings.size() >= 200) break;
+                    if (string_hits.size() >= 600) break;
                 }
             }
         }
-        if (GetTickCount() - t0 > 8000 || players_strings.size() >= 200) break;
+        if (GetTickCount() - t0 > 10000 || string_hits.size() >= 600) break;
         addr = next;
     }
-    VT_LOG(L"String scan: found " + std::to_wstring(players_strings.size()) +
-           L" 'Players' string candidates in " +
-           std::to_wstring(GetTickCount() - t0) + L"ms");
+
+    // Count per needle for diagnostics
+    int counts[6]{};
+    for (auto& h : string_hits) counts[h.needle_idx]++;
+    VT_LOG(L"String scan: " + std::to_wstring(string_hits.size()) + L" hits (" +
+           L"Players=" + std::to_wstring(counts[0]) +
+           L" Workspace=" + std::to_wstring(counts[1]) +
+           L" Lighting=" + std::to_wstring(counts[2]) +
+           L" CoreGui=" + std::to_wstring(counts[3]) +
+           L" RunService=" + std::to_wstring(counts[4]) +
+           L" StarterGui=" + std::to_wstring(counts[5]) +
+           L") in " + std::to_wstring(GetTickCount() - t0) + L"ms");
+
+    // Build flat list for Phase 2 pointer scanning (backwards compat)
+    std::vector<uintptr_t> players_strings;
+    for (auto& h : string_hits)
+        players_strings.push_back(h.addr);
     if (players_strings.empty()) return 0;
 
     // Phase 2: for each "Players" string, search heap for Instance objects
@@ -989,9 +1180,40 @@ uintptr_t World::discover_dm_by_string() {
         return 0;
     };
 
-    // Phase 2b: scan ALL readable heap for pointers to any Players string
-    VT_LOG(L"String scan phase 2: searching all heap for pointers to " +
-           std::to_wstring(players_strings.size()) + L" candidates");
+    // Phase 2a (fast): for each string hit, scan a ±64KB region around it
+    // for heap pointers TO the string. If we find inst+name_off == string_addr,
+    // walk Parent up to DataModel. Faster than full-process pointer scan.
+    VT_LOG(L"String scan phase 2a: local pointer scan + Parent walk");
+    for (auto& hit : string_hits) {
+        if (GetTickCount() - t0 > 12000) break;
+        // Read 64KB region centered on the string address
+        const uintptr_t scan_start = (hit.addr > 0x10000) ? (hit.addr - 0x10000) : 0x10000;
+        const size_t scan_size = 0x20000; // 128KB
+        std::vector<uint8_t> local_buf(scan_size);
+        if (!mem_.read(scan_start, local_buf.data(), scan_size))
+            continue;
+        for (size_t j = 0; j + 8 <= scan_size; j += 8) {
+            const uintptr_t val = *(uintptr_t*)(local_buf.data() + j);
+            if (val != hit.addr) continue;
+            // Found a pointer to our string. Try each name offset.
+            const uintptr_t ptr_addr = scan_start + j;
+            for (uintptr_t no : name_try) {
+                if (ptr_addr < no) continue;
+                const uintptr_t inst = ptr_addr - no;
+                if (!looks_instance(inst)) continue;
+                uintptr_t dm = check_dm_candidate(inst, no);
+                if (dm) {
+                    VT_LOG(L"Phase 2a hit via " + utf8_to_wide(needles[hit.needle_idx].text));
+                    return dm;
+                }
+            }
+        }
+    }
+    VT_LOG(L"Phase 2a: no DataModel from local scan, trying full pointer scan");
+
+    // Phase 2b: scan ALL readable heap for pointers to any of our string hits
+    VT_LOG(L"String scan phase 2b: searching all heap for pointers to " +
+           std::to_wstring(players_strings.size()) + L" string candidates");
     MEMORY_BASIC_INFORMATION mbi2{};
     uintptr_t a2 = 0x10000;
     while (a2 < 0x00007FFFFFFEFFFFULL) {

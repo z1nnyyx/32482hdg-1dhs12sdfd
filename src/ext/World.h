@@ -63,6 +63,7 @@ private:
     uintptr_t find_service(uintptr_t dm, const char* name) const;
     uintptr_t discover_datamodel();
     uintptr_t discover_dm_by_string();
+    uintptr_t discover_dm_by_lua_rip();
     uintptr_t resolve_datamodel();
     uintptr_t resolve_from_scheduler();
     uintptr_t resolve_visual();
