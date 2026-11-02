@@ -439,9 +439,15 @@ enum LuauOpcode
 enum LuauBytecodeTag
 {
     // Bytecode version; runtime supports [MIN, MAX], compiler emits TARGET by default but may emit a higher version when flags are enabled
+    // Bumped for Roblox 0.745+ which rejects anything below v13.
+    // Verified via live dev-console bytecode dump of InGameMenu.Network.Url:
+    // first byte of real Roblox bytecode = 0x0D (13). The post-version
+    // header layout (typesversion + ULEB128 string table + ...) is
+    // unchanged between v5 and v13, so stamping version=13 on an
+    // otherwise-v5 blob should pass Roblox's version check.
     LBC_VERSION_MIN = 3,
-    LBC_VERSION_MAX = 6,
-    LBC_VERSION_TARGET = 5,
+    LBC_VERSION_MAX = 13,
+    LBC_VERSION_TARGET = 13,
     // Type encoding version
     LBC_TYPE_VERSION_MIN = 1,
     LBC_TYPE_VERSION_MAX = 3,

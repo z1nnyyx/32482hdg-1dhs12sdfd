@@ -12,6 +12,7 @@
 // going through a loader-exported DLL.
 
 #include "xeno/XenoMode.h"
+#include "shared/Config.h"
 #include "shared/Log.h"
 
 #include <atomic>
@@ -26,11 +27,11 @@
 // files are scraped. Flip to 1 only in a build you fully control and
 // that targets games you own.
 #ifndef VT_LIVE_BACKEND_ENABLED
-#define VT_LIVE_BACKEND_ENABLED 0
+#define VT_LIVE_BACKEND_ENABLED 1
 #endif
 
 #if VT_LIVE_BACKEND_ENABLED
-#include "xeno/vendor/worker.hpp"
+#include "worker.hpp"  // resolved via src/xeno/vendor/include/ in vcxproj include dirs
 extern std::vector<std::shared_ptr<RBXClient>> Clients;
 extern std::mutex clientsMtx;
 extern "C" {
@@ -53,9 +54,17 @@ bool start() {
     bool first = false;
     std::call_once(g_init_once, [&] {
         VT_LOG(L"voidtrace: live backend starting (opt-in build)");
-        Initialize();
-        g_running.store(true);
-        first = true;
+        try {
+            Initialize();
+            g_running.store(true);
+            first = true;
+        } catch (const std::exception& e) {
+            VT_WARN(L"voidtrace: Initialize threw — backend offline. msg=" +
+                    std::wstring(std::string(e.what()).begin(),
+                                 std::string(e.what()).end()));
+        } catch (...) {
+            VT_WARN(L"voidtrace: Initialize threw unknown — backend offline");
+        }
     });
     return g_running.load() && (first || true);
 #else
@@ -74,6 +83,53 @@ void stop() {
 
 bool is_running() {
     return g_running.load();
+}
+
+bool seed_client_with_dm(std::uint32_t pid, std::uintptr_t fake_dm) {
+#if VT_LIVE_BACKEND_ENABLED
+    if (!g_running.load() || pid == 0 || fake_dm == 0)
+        return false;
+    try {
+        std::lock_guard<std::mutex> lock(clientsMtx);
+        // Check for an existing client with this PID.
+        for (auto it = Clients.begin(); it != Clients.end(); ++it) {
+            if (*it && (*it)->PID == pid) {
+                // If the existing client has a working DataModel, keep it.
+                if ((*it)->FetchDataModel() != 0) {
+                    VT_LOG(L"voidtrace: seed skip — client pid=" +
+                           std::to_wstring(pid) + L" already has live DM");
+                    return true;
+                }
+                // Broken client (DM=0) from the log-scrape path — remove it
+                // so we can replace it with one that has the injected DM.
+                VT_LOG(L"voidtrace: replacing broken client pid=" +
+                       std::to_wstring(pid) + L" (DM was 0)");
+                Clients.erase(it);
+                break;
+            }
+        }
+        // Bridge discovered offsets from Config into the Xeno backend
+        // so Instance tree-walking uses the correct layout for this build.
+        {
+            const auto& ot = vt::Config::instance().get().offsets;
+            offsets::apply_discovered(ot.name_off, ot.child_off, 0);
+        }
+        auto client = std::make_shared<RBXClient>(static_cast<DWORD>(pid),
+                                                   fake_dm);
+        VT_LOG(L"voidtrace: seeded client pid=" + std::to_wstring(pid) +
+               L" DM=0x" + std::to_wstring(fake_dm));
+        Clients.push_back(std::move(client));
+        return true;
+    } catch (const std::exception& e) {
+        VT_WARN(L"voidtrace: seed_client_with_dm threw");
+        return false;
+    } catch (...) {
+        return false;
+    }
+#else
+    (void)pid; (void)fake_dm;
+    return false;
+#endif
 }
 
 std::vector<ClientRow> clients() {
@@ -110,6 +166,11 @@ std::size_t execute(const std::string& source,
             auto it = std::find(targets.begin(), targets.end(), c->Username);
             if (it == targets.end())
                 continue;
+        }
+        if (c->FetchDataModel() == 0) {
+            VT_WARN(L"voidtrace: skipping client pid=" +
+                    std::to_wstring(c->PID) + L" (DataModel=0)");
+            continue;
         }
         c->execute(source);
         ++sent;

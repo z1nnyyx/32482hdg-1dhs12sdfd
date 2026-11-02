@@ -2,7 +2,7 @@
 #include <filesystem>
 #include <fstream>
 
-#define CPPHTTPLIB_OPENSSL_SUPPORT
+// Localhost-only bridge; no HTTPS needed → skip openssl dep.
 #include "server/httplib.h"
 using namespace httplib;
 
@@ -713,13 +713,42 @@ static void serve(Response& res, const json& body) {
 	res.set_content(R"({"error":"Invalid value for the field 'c'"})", "application/json");
 };
 
+static void setup_connection_impl();
 void setup_connection()
+{
+	// Hard outer try/catch so a bad request handler or httplib worker
+	// thread exception never terminates the whole VoidTrace.exe.
+	try { setup_connection_impl(); }
+	catch (const std::exception& e) {
+		std::cerr << "[voidtrace/bridge] setup_connection threw: " << e.what() << "\n";
+	}
+	catch (...) {
+		std::cerr << "[voidtrace/bridge] setup_connection threw unknown\n";
+	}
+}
+static void setup_connection_impl()
 {
 	Server svr;
 	if (!svr.is_valid()) {
 		std::cerr << "Server could not be started\n";
 		return;
 	}
+
+	// httplib catches handler exceptions and dispatches to the error
+	// handler already — but belt-and-braces, set an explicit one so a
+	// surprise throw returns a 500 instead of propagating.
+	svr.set_exception_handler([](const auto&, auto& res, std::exception_ptr ep) {
+		try { if (ep) std::rethrow_exception(ep); }
+		catch (const std::exception& e) {
+			std::cerr << "[voidtrace/bridge] handler threw: " << e.what() << "\n";
+			res.status = 500;
+			res.set_content(std::string("{\"error\":\"handler threw\"}"), "application/json");
+		}
+		catch (...) {
+			res.status = 500;
+			res.set_content("{\"error\":\"handler threw unknown\"}", "application/json");
+		}
+	});
 
 	std::filesystem::path mainDir;
 	std::filesystem::path workspaceDir;

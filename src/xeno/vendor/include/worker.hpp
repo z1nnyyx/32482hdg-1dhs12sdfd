@@ -17,27 +17,45 @@
 #include "utils/ntdll.h"
 
 namespace offsets {
-    // Instance
+    // Instance offsets — defaults for version-765338e04cf54fde.
+    // Name, Children, and Parent are runtime-overridable so the
+    // string-based DataModel scanner can feed discovered values.
     constexpr std::uint64_t This = 0x8;
-    constexpr std::uint64_t Name = 0x50; // 0x48
-    constexpr std::uint64_t Children = 0x58; // 0x50
-    constexpr std::uint64_t Parent = 0x28; // 0x60
+
+    // --- runtime-overridable offsets ---
+    inline std::uint64_t& Name_mut()     { static std::uint64_t v = 0x68; return v; }
+    inline std::uint64_t& Children_mut() { static std::uint64_t v = 0x70; return v; }
+    inline std::uint64_t& Parent_mut()   { static std::uint64_t v = 0x40; return v; }
+    // Read accessors (drop-in replacement for the old constexpr)
+    inline std::uint64_t Name()     { return Name_mut(); }
+    inline std::uint64_t Children() { return Children_mut(); }
+    inline std::uint64_t Parent()   { return Parent_mut(); }
 
     constexpr std::uint64_t ClassDescriptor = 0x18;
     constexpr std::uint64_t ClassName = 0x8;
 
     // Scripts
-    constexpr std::uint64_t ModuleScriptEmbedded = 0x160;
-    constexpr std::uint64_t IsCoreScript = 0x1a8;
+    constexpr std::uint64_t ModuleScriptEmbedded = 0x158;
+    constexpr std::uint64_t IsCoreScript = 0x6E0;
     constexpr std::uint64_t ModuleFlags = IsCoreScript - 0x4;
-    constexpr std::uint64_t LocalScriptEmbedded = 0x1c0;
+    constexpr std::uint64_t LocalScriptEmbedded = 0x1B0;
 
     constexpr std::uint64_t Bytecode = 0x10;
     constexpr std::uint64_t BytecodeSize = 0x20;
 
     // Other
-    constexpr std::uint64_t LocalPlayer = 0x110; // 0x100
-    constexpr std::uint64_t ObjectValue = 0xc0;
+    constexpr std::uint64_t LocalPlayer = 0x128;
+    constexpr std::uint64_t ObjectValue = 0xD8;
+
+    // Called by VoidTrace after the string scanner discovers live offsets.
+    inline void apply_discovered(std::uint64_t name, std::uint64_t children, std::uint64_t parent) {
+        if (name)     Name_mut()     = name;
+        if (children) Children_mut() = children;
+        if (parent)   Parent_mut()   = parent;
+        std::cout << "[voidtrace] offsets::apply_discovered  Name=0x"
+                  << std::hex << Name() << " Children=0x" << Children()
+                  << " Parent=0x" << Parent() << std::dec << "\n";
+    }
 }
 
 const std::string_view Xeno_Version = "1.1.2-voidtrace";
@@ -96,7 +114,7 @@ public:
     std::uintptr_t FindFirstChildAddress(const std::string_view name) const {
         std::vector<std::uintptr_t> childAddresses = GetChildrenAddresses();
         for (std::uintptr_t address : childAddresses) {
-            if (functions::ReadRobloxString(read_memory<std::uintptr_t>(address + offsets::Name, handle), handle) == name)
+            if (functions::ReadRobloxString(read_memory<std::uintptr_t>(address + offsets::Name(), handle), handle) == name)
                 return address;
         }
         return 0;
@@ -150,15 +168,34 @@ public:
 
     // Miscellaneous
     bool SetBytecode(const std::string& compressedBytecode, bool revertBytecode = false) const {
-        if (ClassName() != "LocalScript" && ClassName() != "ModuleScript")
+        auto cn = ClassName();
+        if (cn != "LocalScript" && cn != "ModuleScript")
             return false;
 
-        std::uintptr_t embeddedSourceOffset = (ClassName() == "LocalScript") ? offsets::LocalScriptEmbedded : offsets::ModuleScriptEmbedded;
+        std::uintptr_t embeddedSourceOffset = (cn == "LocalScript") ? offsets::LocalScriptEmbedded : offsets::ModuleScriptEmbedded;
         std::uintptr_t embeddedPtr = read_memory<std::uintptr_t>(_Self + embeddedSourceOffset, handle);
 
+        // Safety: validate embeddedPtr before writing
+        if (embeddedPtr == 0 || embeddedPtr < 0x10000 || embeddedPtr > 0x00007FFFFFFFFFFFULL) {
+            std::cerr << "[voidtrace] SetBytecode: invalid embeddedPtr=0x" << std::hex << embeddedPtr
+                      << " at Self+0x" << embeddedSourceOffset << std::dec
+                      << " — offset likely wrong for this build\n";
+            return false;
+        }
+
+        // Validate existing bytecode pointer looks sane
+        std::uintptr_t existingBc = read_memory<std::uintptr_t>(embeddedPtr + offsets::Bytecode, handle);
+        std::uint64_t existingSize = read_memory<std::uint64_t>(embeddedPtr + offsets::BytecodeSize, handle);
+        if (existingBc == 0 || existingSize == 0 || existingSize > 50000000) {
+            std::cerr << "[voidtrace] SetBytecode: existing bytecode looks invalid (ptr=0x"
+                      << std::hex << existingBc << " size=" << std::dec << existingSize
+                      << ") — Bytecode/BytecodeSize offsets may be wrong\n";
+            return false;
+        }
+
         if (revertBytecode) {
-            std::uintptr_t originalBytecodePtr = read_memory<std::uintptr_t>(embeddedPtr + offsets::Bytecode, handle);
-            std::uint64_t originalSize = read_memory<std::uint64_t>(embeddedPtr + offsets::BytecodeSize, handle);
+            std::uintptr_t originalBytecodePtr = existingBc;
+            std::uint64_t originalSize = existingSize;
 
             std::thread([embeddedPtr, originalBytecodePtr, originalSize, handle = this->handle]() {
                 Sleep(850);
@@ -185,10 +222,24 @@ public:
     std::string GetBytecode() const;
 
     void UnlockModule() const {
-        if (ClassName() == "ModuleScript") {
-            write_memory<std::uintptr_t>(Self() + offsets::ModuleFlags, 0x100000000, handle);
-            write_memory<std::uintptr_t>(Self() + offsets::IsCoreScript, 0x1, handle);
+        if (ClassName() != "ModuleScript") return;
+        // Safety: verify we're not writing to obviously wrong addresses
+        // IsCoreScript offset 0x6E0 is very deep into the Instance — if the
+        // Instance allocation is smaller than that, we'd corrupt adjacent memory.
+        // Read-before-write: check the current value is sane (0 or 1, not garbage)
+        std::uintptr_t cur_flags = read_memory<std::uintptr_t>(Self() + offsets::ModuleFlags, handle);
+        std::uintptr_t cur_core  = read_memory<std::uintptr_t>(Self() + offsets::IsCoreScript, handle);
+        // If current values look like plausible flags (small numbers), proceed
+        if (cur_flags > 0x10000000000ULL && cur_core > 0x10000000000ULL) {
+            std::cerr << "[voidtrace] UnlockModule: flags=0x" << std::hex << cur_flags
+                      << " core=0x" << cur_core << std::dec
+                      << " look like pointers, not flags — IsCoreScript offset 0x"
+                      << std::hex << offsets::IsCoreScript << std::dec
+                      << " is likely wrong. Skipping to avoid crash.\n";
+            return;
         }
+        write_memory<std::uintptr_t>(Self() + offsets::ModuleFlags, 0x100000000, handle);
+        write_memory<std::uintptr_t>(Self() + offsets::IsCoreScript, 0x1, handle);
     }
 
     std::vector<std::string> GetProperties() const {
@@ -214,7 +265,7 @@ public:
     }
 
     inline std::string Name() const {
-        return functions::ReadRobloxString(read_memory<std::uintptr_t>(_Self + offsets::Name, handle), handle);
+        return functions::ReadRobloxString(read_memory<std::uintptr_t>(_Self + offsets::Name(), handle), handle);
     }
 
     inline std::string ClassName() const {
@@ -222,7 +273,7 @@ public:
     }
 
     inline std::uintptr_t ParentAddress() const {
-        return read_memory<std::uintptr_t>(_Self + offsets::Parent, handle);
+        return read_memory<std::uintptr_t>(_Self + offsets::Parent(), handle);
     }
 
     inline std::unique_ptr<Instance> Parent() const {
@@ -234,6 +285,10 @@ class RBXClient {
 private:
     HANDLE handle;
     std::uintptr_t RenderView{};
+    // Real DataModel address resolved by VoidTrace's OffsetSync/World
+    // scanner. When set, FetchDataModel() returns this directly,
+    // skipping the RenderView → fake-pointer → DM dereference chain.
+    std::uintptr_t InjectedFakeDataModel{};
 public:
     std::string Username = "N/A";
     std::string Version = "";
@@ -245,6 +300,10 @@ public:
 
     RBXClient(DWORD processID);
 
+    // Alternate constructor used by VoidTrace to seed the DM address
+    // discovered via OffsetSync/World, bypassing GetRV's log scan.
+    RBXClient(DWORD processID, std::uintptr_t fakeDataModelAddr);
+
     inline bool isProcessAlive() const {
         DWORD exitCode;
         if (GetExitCodeProcess(handle, &exitCode)) {
@@ -254,14 +313,28 @@ public:
     }
 
     inline std::uintptr_t FetchDataModel() const {
-        std::uintptr_t fakeDataModel = read_memory<std::uintptr_t>(RenderView + 0x118, handle);
-        if (fakeDataModel == 0)
-            std::cerr << "Could not fetch datamodel, expect a crash\n";
-        return fakeDataModel + 0x190;
+        // VoidTrace's scanner resolves the REAL DataModel address, so
+        // when an injected value is present, return it directly — no
+        // fake-to-real dereference needed.
+        if (InjectedFakeDataModel)
+            return InjectedFakeDataModel;
+        // Fallback: RenderView-derived path (original Xeno log-scrape).
+        std::uintptr_t fakeDataModel =
+            read_memory<std::uintptr_t>(RenderView + 0x118, handle);
+        if (fakeDataModel == 0) {
+            std::cerr << "[voidtrace] FetchDataModel: both injected and RV-derived DM are 0\n";
+            return 0;
+        }
+        return fakeDataModel + 0x1B8;
     }
 
     void execute(const std::string& source) const;
     bool loadstring(const std::string& source, const std::string& script_name, const std::string& chunk_name) const;
+
+    // Run the full bootstrap hijack: write client.lua into CoreGui's Url
+    // ModuleScript and VRNavigation so the VoidTrace folder appears in
+    // RobloxReplicatedStorage. Must be called once after DataModel is live.
+    void performBootstrapHijack();
 
     void UnlockModule(const std::string_view objectval_name) const {
         std::uintptr_t scriptPtr = RBXClient::GetObjectValuePtr(objectval_name);

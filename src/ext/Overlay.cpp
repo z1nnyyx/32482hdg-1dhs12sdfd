@@ -247,6 +247,108 @@ void Overlay::present(int W, int H) {
         unstroke(st);
     }
 
+    // ----- VoidTrace status chip (bottom-right of Roblox window) -----
+    //
+    // Dark pill with rounded edges, VoidTrace glyph square, status text:
+    //
+    //    ┌─────────────────────────────────┐
+    //    │ ▓  VOIDTRACE · attached · User │
+    //    └─────────────────────────────────┘
+    //
+    // Gives the user visible feedback that VoidTrace is live inside the
+    // Roblox window — independent of whether Lua execution landed.
+    {
+        bool attached;
+        std::string user, backend;
+        {
+            std::lock_guard lock(status_mtx_);
+            attached = status_attached_;
+            user     = status_user_;
+            backend  = status_backend_;
+        }
+
+        char chip_buf[128];
+        if (attached) {
+            if (!user.empty() && user != "N/A" && user != "Unknown")
+                sprintf_s(chip_buf, "VOIDTRACE  attached  %s", user.c_str());
+            else if (!backend.empty())
+                sprintf_s(chip_buf, "VOIDTRACE  %s", backend.c_str());
+            else
+                sprintf_s(chip_buf, "VOIDTRACE  attached");
+        } else {
+            sprintf_s(chip_buf, "VOIDTRACE  idle");
+        }
+
+        // Measure text to size the chip
+        SIZE text_sz{};
+        GetTextExtentPoint32A(dc, chip_buf, (int)strlen(chip_buf), &text_sz);
+        const int pad_h = 12;
+        const int pad_v = 7;
+        const int glyph = 14;          // VoidTrace square
+        const int gap   = 8;
+        const int chip_w = text_sz.cx + glyph + gap + pad_h * 2;
+        const int chip_h = (std::max)((long)text_sz.cy, (long)glyph) + pad_v * 2;
+        const int margin = 14;
+        const int cx = W - chip_w - margin;
+        const int cy = H - chip_h - margin;
+
+        // Subtle shadow for depth
+        {
+            HBRUSH shadow = CreateSolidBrush(RGB(0, 0, 0));
+            RECT sh_r{cx + 2, cy + 3, cx + chip_w + 2, cy + chip_h + 3};
+            // GDI has no alpha; fake shadow with a thin dark offset.
+            FillRect(dc, &sh_r, shadow);
+            DeleteObject(shadow);
+        }
+
+        // Chip body — dark navy
+        {
+            HBRUSH body = CreateSolidBrush(attached
+                ? RGB(8, 13, 26)
+                : RGB(14, 14, 18));
+            RECT br{cx, cy, cx + chip_w, cy + chip_h};
+            FillRect(dc, &br, body);
+            DeleteObject(body);
+        }
+
+        // Thin accent border — electric blue when attached, dim grey when idle
+        {
+            HPEN pen = CreatePen(PS_SOLID, 1, attached
+                ? RGB(22, 100, 220)
+                : RGB(70, 72, 90));
+            auto op = SelectObject(dc, pen);
+            auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+            Rectangle(dc, cx, cy, cx + chip_w, cy + chip_h);
+            SelectObject(dc, op);
+            SelectObject(dc, ob);
+            DeleteObject(pen);
+        }
+
+        // VoidTrace glyph — small filled accent square
+        {
+            HBRUSH gl = CreateSolidBrush(attached
+                ? RGB(22, 100, 220)      // electric blue when attached
+                : RGB(70, 72, 90));      // dim grey when idle
+            RECT gr{cx + pad_h, cy + (chip_h - glyph) / 2,
+                    cx + pad_h + glyph, cy + (chip_h + glyph) / 2};
+            FillRect(dc, &gr, gl);
+            DeleteObject(gl);
+        }
+
+        // Status text
+        SetTextColor(dc, attached
+            ? RGB(220, 232, 255)
+            : RGB(150, 155, 170));
+        RECT tr{
+            cx + pad_h + glyph + gap,
+            cy + (chip_h - text_sz.cy) / 2,
+            cx + chip_w - pad_h,
+            cy + chip_h - 1,
+        };
+        DrawTextA(dc, chip_buf, -1, &tr, DT_LEFT | DT_SINGLELINE);
+        mark(cx - 4, cy - 4, cx + chip_w + 4, cy + chip_h + 4);
+    }
+
     SelectObject(dc, of);
 
     if (any) {

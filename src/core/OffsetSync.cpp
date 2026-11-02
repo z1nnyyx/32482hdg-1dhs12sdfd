@@ -133,8 +133,8 @@ bool is_task_scheduler(ext::Memory& mem, uintptr_t ts) {
 bool is_datamodel(ext::Memory& mem, uintptr_t dm) {
     if (!looks_heap(dm))
         return false;
-    const uintptr_t child[] = { 0x60, 0x68, 0x70, 0x78, 0x80, 0x88 };
-    const uintptr_t names[] = { 0xB0, 0x70, 0x48, 0x50, 0x88, 0x8, 0x28, 0x30 };
+    const uintptr_t child[] = { 0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90, 0x98 };
+    const uintptr_t names[] = { 0x28, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90, 0x98, 0xA0, 0xA8, 0xB0, 0xB8, 0xC0, 0x8 };
     auto has_players = [&](uintptr_t b, uintptr_t e, uintptr_t stride) {
         if (!looks_heap(b) || !looks_heap(e) || e <= b)
             return false;
@@ -175,7 +175,9 @@ bool is_datamodel(ext::Memory& mem, uintptr_t dm) {
 }
 
 uintptr_t follow_fake(ext::Memory& mem, uintptr_t fake, uintptr_t& used_off) {
-    const uintptr_t offs[] = { 0x1D8, 0x1C0, 0x1B8, 0x1E0, 0x198, 0x1A8, 0x1F0, 0x200, 0 };
+    const uintptr_t offs[] = { 0x1B8, 0x1D8, 0x1C0, 0x1E0, 0x198, 0x1A8, 0x1F0, 0x200,
+                               0x208, 0x210, 0x218, 0x220, 0x228, 0x230, 0x238, 0x240,
+                               0x190, 0x188, 0x180, 0x178, 0x170, 0x168, 0x160, 0 };
     for (uintptr_t o : offs) {
         const uintptr_t dm = o ? mem.read_ptr(fake + o) : fake;
         if (is_datamodel(mem, dm)) {
@@ -391,7 +393,7 @@ bool OffsetSync::refresh() {
         uintptr_t best_rva = have >= 80 ? o.task_scheduler : 0;
         int best_sc = have >= 80 ? have : 0;
         const uintptr_t kTsTry[] = {
-            0x83B1A00, 0x8ABD728, 0x8A44D68, 0x8CA9CC8
+            0x68F3BC8, 0x68F3DA0, 0x83B1A00, 0x8ABD728, 0x8A44D68, 0x8CA9CC8
         };
         for (uintptr_t rva : kTsTry) {
             const uintptr_t val = mem.read_ptr(rp->base + rva);
@@ -433,6 +435,32 @@ bool OffsetSync::refresh() {
             VT_LOG(L"auto task_scheduler " + format_hex(o.task_scheduler) +
                    L" score " + std::to_wstring(best_sc));
         }
+    }
+
+    // Brute-force DataModel scan if hardcoded RVAs are dead.
+    if (!o.fake_datamodel) {
+        VT_LOG(L"fake_datamodel is 0 — starting brute-force .data scan");
+        const DWORD dm0 = GetTickCount();
+        uintptr_t best_dm_rva = 0;
+        each_region(proc, rp->base, rp->size, PAGE_READWRITE,
+            [&](uintptr_t at, const uint8_t* img, size_t n) {
+                if (best_dm_rva || (GetTickCount() - dm0 > 12000))
+                    return;
+                for (size_t i = 0; i + 8 <= n; i += 8) {
+                    const uintptr_t fake = *(const uintptr_t*)(img + i);
+                    if (!looks_heap(fake))
+                        continue;
+                    uintptr_t used = 0;
+                    if (follow_fake(mem, fake, used)) {
+                        best_dm_rva = (at + i) - rp->base;
+                        VT_LOG(L"auto fake_datamodel " + format_hex(best_dm_rva) +
+                               L"  fakeOff " + format_hex(used));
+                        return;
+                    }
+                }
+            });
+        if (best_dm_rva)
+            o.fake_datamodel = best_dm_rva;
     }
 
     const auto out = data_root() / L"config" / L"offsets.json";
