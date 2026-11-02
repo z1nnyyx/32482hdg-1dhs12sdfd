@@ -898,11 +898,202 @@ uintptr_t World::discover_datamodel() {
         addr = next;
     }
 done:
-    VT_WARN(L"DataModel scan miss (pointer-based) — trying Lua RIP-relative scan");
+    VT_WARN(L"DataModel scan miss (pointer-based) — trying thread stack scan");
+    if (auto dm = discover_dm_by_thread_stack())
+        return dm;
+    VT_WARN(L"Thread stack scan miss — trying Lua RIP-relative scan");
     if (auto dm = discover_dm_by_lua_rip())
         return dm;
     VT_WARN(L"Lua RIP scan miss — trying multi-string scan");
     return discover_dm_by_string();
+}
+
+// ---------------------------------------------------------------------------
+// Thread stack scanner (Grok round 4 — highest priority method)
+// 1. Enumerate Roblox threads via TH32CS_SNAPTHREAD
+// 2. Read TEB → stack base/limit for each thread
+// 3. Scan stack memory for heap pointers that pass lua_State validation
+// 4. Walk lua_State → global_State → ScriptContext → DataModel
+// ---------------------------------------------------------------------------
+uintptr_t World::discover_dm_by_thread_stack() {
+    if (!mem_.handle() || !base_ || !size_)
+        return 0;
+    const DWORD pid = GetProcessId(mem_.handle());
+    if (!pid) return 0;
+    const DWORD t0 = GetTickCount();
+
+    using NtQIT = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+    static NtQIT NtQueryInformationThread = nullptr;
+    if (!NtQueryInformationThread) {
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        if (ntdll)
+            NtQueryInformationThread = (NtQIT)GetProcAddress(ntdll, "NtQueryInformationThread");
+    }
+    if (!NtQueryInformationThread) return 0;
+
+    struct Tbi {
+        LONG exit_status;
+        void* teb;
+        void* cid_proc;
+        void* cid_thread;
+        ULONG_PTR aff;
+        LONG prio;
+        LONG base_prio;
+    };
+
+    auto heap = [](uintptr_t p) {
+        return p > 0x10000 && p < 0x00007F0000000000ULL && (p & 7) == 0;
+    };
+
+    // Strengthened lua_State validator: probe 0x00..0xA0 for stack base/top
+    // and require multiple corroborating fields
+    auto looks_lua_state = [&](uintptr_t L) -> bool {
+        if (!heap(L)) return false;
+        uint8_t buf[0xB0]{};
+        if (!mem_.read(L, buf, sizeof(buf))) return false;
+        auto rd = [&](int off) -> uintptr_t {
+            return *(uintptr_t*)(buf + off);
+        };
+        for (int a = 0x00; a <= 0x98; a += 8) {
+            uintptr_t base_p = rd(a);
+            uintptr_t top_p  = rd(a + 8);
+            if (!heap(base_p) || !heap(top_p)) continue;
+            if (top_p < base_p || (top_p - base_p) > 0x100000) continue;
+            size_t slots = (top_p - base_p) / 16;
+            if (slots < 1 || slots >= 8000) continue;
+            // Require a global_State-like pointer (heap, not self, not base/top)
+            int gs_candidates = 0;
+            for (int go = 0x00; go <= 0xA0; go += 8) {
+                if (go == a || go == a + 8) continue;
+                uintptr_t gs = rd(go);
+                if (heap(gs) && gs != L && gs != base_p && gs != top_p)
+                    ++gs_candidates;
+            }
+            if (gs_candidates >= 2) return true;
+        }
+        return false;
+    };
+
+    // Walk from lua_State to DataModel (same 3-step as Lua RIP scanner)
+    auto walk_to_dm = [&](uintptr_t L) -> uintptr_t {
+        // Step 1: direct DM pointer in lua_State or global_State
+        for (int off = 0; off <= 0xA0; off += 8) {
+            uintptr_t gs = mem_.read_ptr(L + off);
+            if (!heap(gs) || gs == L) continue;
+            // Check global_State for DM pointers
+            for (int g2 = 0; g2 <= 0x300; g2 += 8) {
+                uintptr_t p = mem_.read_ptr(gs + g2);
+                if (!heap(p) || p == gs || p == L) continue;
+                int s = place_score(p);
+                if (s >= 80) {
+                    VT_LOG(L"Thread stack: DM via L+" + format_hex(off) +
+                           L"→G+" + format_hex(g2) +
+                           L"  dm=" + format_hex(p) + L"  score=" + std::to_wstring(s));
+                    return p;
+                }
+            }
+        }
+        // Step 2: L → global_State → ScriptContext → Parent → DM
+        for (int off = 0; off <= 0xA0; off += 8) {
+            uintptr_t gs = mem_.read_ptr(L + off);
+            if (!heap(gs) || gs == L) continue;
+            for (int g2 = 0; g2 <= 0x200; g2 += 8) {
+                uintptr_t sc = mem_.read_ptr(gs + g2);
+                if (!heap(sc) || sc == gs || sc == L) continue;
+                for (int po = 0x28; po <= 0x68; po += 8) {
+                    uintptr_t dm = mem_.read_ptr(sc + po);
+                    if (!heap(dm) || dm == sc) continue;
+                    int s = place_score(dm);
+                    if (s >= 80) {
+                        VT_LOG(L"Thread stack: DM via L+" + format_hex(off) +
+                               L"→G+" + format_hex(g2) + L"→SC+" + format_hex(po) +
+                               L"  dm=" + format_hex(dm) + L"  score=" + std::to_wstring(s));
+                        return dm;
+                    }
+                }
+            }
+        }
+        return 0;
+    };
+
+    // Enumerate threads
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    THREADENTRY32 te{};
+    te.dwSize = sizeof(te);
+
+    int threads_scanned = 0;
+    int lua_states_found = 0;
+    std::vector<uintptr_t> checked_states; // avoid re-checking
+
+    if (Thread32First(snap, &te)) {
+        do {
+            if (te.th32OwnerProcessID != pid) continue;
+            if (GetTickCount() - t0 > 10000) break;
+
+            HANDLE th = OpenThread(THREAD_QUERY_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION,
+                                   FALSE, te.th32ThreadID);
+            if (!th) continue;
+            Tbi tbi{};
+            LONG st = NtQueryInformationThread(th, 0, &tbi, sizeof(tbi), nullptr);
+            CloseHandle(th);
+            if (st < 0 || !mem_.looks((uintptr_t)tbi.teb))
+                continue;
+
+            const uintptr_t stack_base = mem_.read_ptr((uintptr_t)tbi.teb + 0x08);
+            const uintptr_t stack_lim  = mem_.read_ptr((uintptr_t)tbi.teb + 0x10);
+            if (!heap(stack_base) || stack_base <= stack_lim)
+                continue;
+
+            // Scan the top 128KB of stack (most likely to have active frames)
+            uintptr_t scan_start = stack_base - 0x20000;
+            if (scan_start < stack_lim)
+                scan_start = stack_lim;
+            const size_t scan_bytes = (size_t)(stack_base - scan_start);
+            if (scan_bytes < 64 || scan_bytes > 0x20000)
+                continue;
+
+            std::vector<uintptr_t> words(scan_bytes / 8);
+            if (!mem_.read(scan_start, words.data(), words.size() * 8))
+                continue;
+            ++threads_scanned;
+
+            for (uintptr_t w : words) {
+                if (!heap(w)) continue;
+                // Skip if in module (.text/.data) — lua_State lives on heap
+                if (w >= base_ && w < base_ + size_) continue;
+                // Skip already-checked addresses
+                bool dup = false;
+                for (uintptr_t c : checked_states)
+                    if (c == w) { dup = true; break; }
+                if (dup) continue;
+
+                if (looks_lua_state(w)) {
+                    ++lua_states_found;
+                    checked_states.push_back(w);
+                    VT_LOG(L"Thread stack: lua_State candidate at " + format_hex(w) +
+                           L"  tid=" + std::to_wstring(te.th32ThreadID));
+
+                    if (auto dm = walk_to_dm(w)) {
+                        CloseHandle(snap);
+                        VT_LOG(L"Thread stack scan: DataModel FOUND in " +
+                               std::to_wstring(GetTickCount() - t0) + L"ms" +
+                               L"  threads=" + std::to_wstring(threads_scanned) +
+                               L"  states=" + std::to_wstring(lua_states_found));
+                        return dm;
+                    }
+                }
+                if (checked_states.size() >= 200) break;
+            }
+        } while (Thread32Next(snap, &te));
+    }
+    CloseHandle(snap);
+
+    VT_WARN(L"Thread stack scan: no DataModel (" +
+            std::to_wstring(threads_scanned) + L" threads, " +
+            std::to_wstring(lua_states_found) + L" lua_State candidates in " +
+            std::to_wstring(GetTickCount() - t0) + L"ms)");
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,8 +1268,13 @@ uintptr_t World::discover_dm_by_lua_rip() {
             if (target >= base_ && target < base_ + size_) {
                 add_unique(target, true);
                 uintptr_t deref = mem_.read_ptr(target);
-                if (heap(deref))
+                if (heap(deref)) {
                     add_unique(deref, false);
+                    // Double-dereference: .data → ptr → ptr → lua_State
+                    uintptr_t deref2 = mem_.read_ptr(deref);
+                    if (heap(deref2) && deref2 != deref)
+                        add_unique(deref2, false);
+                }
             }
         }
     };

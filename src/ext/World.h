@@ -64,6 +64,7 @@ private:
     uintptr_t discover_datamodel();
     uintptr_t discover_dm_by_string();
     uintptr_t discover_dm_by_lua_rip();
+    uintptr_t discover_dm_by_thread_stack();
     uintptr_t resolve_datamodel();
     uintptr_t resolve_from_scheduler();
     uintptr_t resolve_visual();
