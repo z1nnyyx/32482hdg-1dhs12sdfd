@@ -46,27 +46,45 @@ std::vector<std::uintptr_t> functions::GetChildrenAddresses(std::uintptr_t addre
 }
 
 std::string functions::ReadRobloxString(std::uintptr_t address, HANDLE handle) {
-    std::uint64_t stringCount = read_memory<std::uint64_t>(address + 0x10, handle);
-
-    if (stringCount > 15000 || stringCount <= 0)
+    if (address == 0 || address < 0x10000 || address > 0x00007FFFFFFFFFFFULL)
         return "";
 
-    if (stringCount > 15)
-        address = read_memory<std::uintptr_t>(address, handle);
+    // Strategy 1: classic MSVC std::string (SSO inline or heap-allocated)
+    // Layout: chars at +0x00 (inline if len<=15, else pointer), size at +0x10, cap at +0x18
+    std::uint64_t stringCount = read_memory<std::uint64_t>(address + 0x10, handle);
+    if (stringCount > 0 && stringCount <= 15000) {
+        std::uintptr_t data_addr = address;
+        if (stringCount > 15)
+            data_addr = read_memory<std::uintptr_t>(address, handle);
 
-    std::string buffer;
-    buffer.resize(stringCount);
+        if (data_addr > 0x10000 && data_addr < 0x00007FFFFFFFFFFFULL) {
+            std::string buffer(stringCount, '\0');
+            ULONG bytes_read = 0;
+            NtReadVirtualMemory(handle, reinterpret_cast<LPCVOID>(data_addr),
+                                buffer.data(), (ULONG)stringCount, &bytes_read);
+            if (bytes_read == stringCount && !buffer.empty() && buffer[0] >= 0x20)
+                return buffer;
+        }
+    }
 
-    MEMORY_BASIC_INFORMATION bi;
-    VirtualQueryEx(handle, reinterpret_cast<LPCVOID>(address), &bi, sizeof(bi));
+    // Strategy 2: Roblox interned string / TString-like object
+    // The address might point to a string header where char data is at
+    // a small offset (e.g., +0x18, +0x20, +0x24) after a length field.
+    // Try reading inline chars directly (covers SSO case from Instance side)
+    {
+        char buf[64]{};
+        ULONG bytes_read = 0;
+        NtReadVirtualMemory(handle, reinterpret_cast<LPCVOID>(address),
+                            buf, 63, &bytes_read);
+        if (bytes_read > 0 && buf[0] >= 0x20 && buf[0] < 0x7F) {
+            buf[63] = '\0';
+            size_t len = strnlen(buf, 63);
+            if (len >= 1 && len <= 60)
+                return std::string(buf, len);
+        }
+    }
 
-    NtReadVirtualMemory(handle, reinterpret_cast<LPCVOID>(address), buffer.data(), (ULONG)stringCount, nullptr);
-
-    PVOID baddr = bi.AllocationBase;
-    SIZE_T size = bi.RegionSize;
-    NtUnlockVirtualMemory(handle, &baddr, &size, 1);
-
-    return buffer;
+    return "";
 }
 
 std::string Instance::GetBytecode() const {

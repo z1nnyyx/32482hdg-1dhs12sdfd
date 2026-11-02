@@ -168,15 +168,34 @@ public:
 
     // Miscellaneous
     bool SetBytecode(const std::string& compressedBytecode, bool revertBytecode = false) const {
-        if (ClassName() != "LocalScript" && ClassName() != "ModuleScript")
+        auto cn = ClassName();
+        if (cn != "LocalScript" && cn != "ModuleScript")
             return false;
 
-        std::uintptr_t embeddedSourceOffset = (ClassName() == "LocalScript") ? offsets::LocalScriptEmbedded : offsets::ModuleScriptEmbedded;
+        std::uintptr_t embeddedSourceOffset = (cn == "LocalScript") ? offsets::LocalScriptEmbedded : offsets::ModuleScriptEmbedded;
         std::uintptr_t embeddedPtr = read_memory<std::uintptr_t>(_Self + embeddedSourceOffset, handle);
 
+        // Safety: validate embeddedPtr before writing
+        if (embeddedPtr == 0 || embeddedPtr < 0x10000 || embeddedPtr > 0x00007FFFFFFFFFFFULL) {
+            std::cerr << "[voidtrace] SetBytecode: invalid embeddedPtr=0x" << std::hex << embeddedPtr
+                      << " at Self+0x" << embeddedSourceOffset << std::dec
+                      << " — offset likely wrong for this build\n";
+            return false;
+        }
+
+        // Validate existing bytecode pointer looks sane
+        std::uintptr_t existingBc = read_memory<std::uintptr_t>(embeddedPtr + offsets::Bytecode, handle);
+        std::uint64_t existingSize = read_memory<std::uint64_t>(embeddedPtr + offsets::BytecodeSize, handle);
+        if (existingBc == 0 || existingSize == 0 || existingSize > 50000000) {
+            std::cerr << "[voidtrace] SetBytecode: existing bytecode looks invalid (ptr=0x"
+                      << std::hex << existingBc << " size=" << std::dec << existingSize
+                      << ") — Bytecode/BytecodeSize offsets may be wrong\n";
+            return false;
+        }
+
         if (revertBytecode) {
-            std::uintptr_t originalBytecodePtr = read_memory<std::uintptr_t>(embeddedPtr + offsets::Bytecode, handle);
-            std::uint64_t originalSize = read_memory<std::uint64_t>(embeddedPtr + offsets::BytecodeSize, handle);
+            std::uintptr_t originalBytecodePtr = existingBc;
+            std::uint64_t originalSize = existingSize;
 
             std::thread([embeddedPtr, originalBytecodePtr, originalSize, handle = this->handle]() {
                 Sleep(850);
@@ -203,10 +222,24 @@ public:
     std::string GetBytecode() const;
 
     void UnlockModule() const {
-        if (ClassName() == "ModuleScript") {
-            write_memory<std::uintptr_t>(Self() + offsets::ModuleFlags, 0x100000000, handle);
-            write_memory<std::uintptr_t>(Self() + offsets::IsCoreScript, 0x1, handle);
+        if (ClassName() != "ModuleScript") return;
+        // Safety: verify we're not writing to obviously wrong addresses
+        // IsCoreScript offset 0x6E0 is very deep into the Instance — if the
+        // Instance allocation is smaller than that, we'd corrupt adjacent memory.
+        // Read-before-write: check the current value is sane (0 or 1, not garbage)
+        std::uintptr_t cur_flags = read_memory<std::uintptr_t>(Self() + offsets::ModuleFlags, handle);
+        std::uintptr_t cur_core  = read_memory<std::uintptr_t>(Self() + offsets::IsCoreScript, handle);
+        // If current values look like plausible flags (small numbers), proceed
+        if (cur_flags > 0x10000000000ULL && cur_core > 0x10000000000ULL) {
+            std::cerr << "[voidtrace] UnlockModule: flags=0x" << std::hex << cur_flags
+                      << " core=0x" << cur_core << std::dec
+                      << " look like pointers, not flags — IsCoreScript offset 0x"
+                      << std::hex << offsets::IsCoreScript << std::dec
+                      << " is likely wrong. Skipping to avoid crash.\n";
+            return;
         }
+        write_memory<std::uintptr_t>(Self() + offsets::ModuleFlags, 0x100000000, handle);
+        write_memory<std::uintptr_t>(Self() + offsets::IsCoreScript, 0x1, handle);
     }
 
     std::vector<std::string> GetProperties() const {
