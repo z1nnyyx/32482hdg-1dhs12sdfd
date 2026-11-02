@@ -168,17 +168,48 @@ std::string World::inst_name(uintptr_t inst) const {
             return s;
         }
     }
+    // Only cache a new offset if the name is a known Roblox service/class.
+    // This prevents false-positive caching from random heap data.
+    auto is_known = [](const std::string& s) {
+        static const char* names[] = {
+            "Players", "Workspace", "Lighting", "CoreGui", "StarterPlayer",
+            "ReplicatedStorage", "StarterGui", "Teams", "StarterPack",
+            "SoundService", "RunService", "DataModel", "Game",
+            "ReplicatedFirst", "Chat", "LocalizationService",
+            "TestService", "HttpService", "TeleportService",
+            "UserInputService", "ContextActionService",
+            "HumanoidRootPart", "Head", "Torso", "Humanoid",
+            "RobloxGui", "Modules", "CorePackages",
+        };
+        for (auto n : names)
+            if (s == n) return true;
+        return false;
+    };
     static int s_log_n = 0;
+    std::string first_result;
+    uintptr_t first_off = 0;
     for (uintptr_t offv : prefer(off().name_off, kNameOff, (int)std::size(kNameOff))) {
         if (offv == cal || offv == hint) continue;
         if (auto s = try_at(inst + offv); !s.empty()) {
-            if (!cal) {
+            if (!cal && is_known(s)) {
                 s_cal.store(offv, std::memory_order_relaxed);
                 if (s_log_n++ < 3)
                     VT_LOG(L"inst_name: cached +0x" + format_hex(offv) + L" → " + utf8_to_wide(s));
+                return s;
             }
-            return s;
+            if (first_result.empty()) {
+                first_result = s;
+                first_off = offv;
+            }
         }
+    }
+    // Return first match even if not known, but don't cache it
+    if (!first_result.empty()) {
+        if (!cal && s_log_n < 3) {
+            ++s_log_n;
+            VT_LOG(L"inst_name: uncached +0x" + format_hex(first_off) + L" → " + utf8_to_wide(first_result));
+        }
+        return first_result;
     }
     return {};
 }
@@ -797,6 +828,14 @@ uintptr_t World::discover_datamodel() {
         return 0;
     dm_scan_done_ = true;
     last_dm_check_ = now;
+
+    // Reset inst_name cache before scanning — a stale false-positive offset
+    // (e.g. 0x98 from random heap data) poisons place_score for every
+    // subsequent candidate check.
+    g_name_reprobe.store(true, std::memory_order_relaxed);
+    g_name_off_hint.store(0x68, std::memory_order_relaxed);
+    VT_LOG(L"discover_datamodel: reset name cache, hint=0x68");
+
     const DWORD t0 = GetTickCount();
     auto cheap = [&](uintptr_t dm) {
         if (!mem_.looks(dm))
@@ -1217,8 +1256,8 @@ uintptr_t World::discover_dm_by_string() {
     MEMORY_BASIC_INFORMATION mbi2{};
     uintptr_t a2 = 0x10000;
     while (a2 < 0x00007FFFFFFEFFFFULL) {
-        if (GetTickCount() - t0 > 20000) {
-            VT_WARN(L"String-scan timeout at 20s");
+        if (GetTickCount() - t0 > 12000) {
+            VT_WARN(L"String-scan phase 2b timeout at 12s");
             return 0;
         }
         if (!VirtualQueryEx(mem_.handle(), (LPCVOID)a2, &mbi2, sizeof(mbi2))) break;
