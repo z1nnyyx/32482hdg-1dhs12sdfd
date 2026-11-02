@@ -904,15 +904,13 @@ done:
 }
 
 // ---------------------------------------------------------------------------
-// Lua RIP-relative scanner (Grok method #1)
-// For each known Lua function RVA, read 256 bytes of code and scan for
-// RIP-relative mov/lea patterns:  48 8B 0D xx xx xx xx  (mov rcx, [rip+disp32])
-//                                 48 8B 05 xx xx xx xx  (mov rax, [rip+disp32])
-//                                 48 8D 0D xx xx xx xx  (lea rcx, [rip+disp32])
-//                                 48 8D 05 xx xx xx xx  (lea rax, [rip+disp32])
-//                                 4C 8B 05/0D/15/1D/25/2D/35/3D  (mov r8-r15, ...)
-// Resolve each target address. Dereference once to get a heap pointer.
-// Walk possible Instance layouts looking for DataModel services.
+// Lua RIP-relative scanner + lua_State walker (Grok method)
+// 1. Read 512 bytes from each known Lua function
+// 2. Extract RIP-relative targets (mov/lea [rip+disp32])
+// 3. Follow E8 rel32 CALL targets and scan those callees too
+// 4. For each resolved target: test as lua_State, global_State, or
+//    structure containing a DataModel pointer
+// 5. lua_State → global_State → ScriptContext → DataModel walk
 // ---------------------------------------------------------------------------
 uintptr_t World::discover_dm_by_lua_rip() {
     if (!mem_.handle() || !base_ || !size_)
@@ -920,9 +918,9 @@ uintptr_t World::discover_dm_by_lua_rip() {
     const auto& tbl = off();
     const DWORD t0 = GetTickCount();
 
-    // Collect all non-zero Lua function RVAs
+    // Priority-ordered Lua function RVAs (highest value first per Grok)
     const uintptr_t rvas[] = {
-        tbl.lua_gettop, tbl.lua_pcall, tbl.luau_load, tbl.lua_newthread,
+        tbl.lua_newthread, tbl.luau_load, tbl.lua_pcall, tbl.lua_gettop,
         tbl.lua_pushstring, tbl.lua_pushlstring, tbl.lua_pushcclosure,
         tbl.lua_tolstring, tbl.lua_getfield, tbl.lua_setfield,
         tbl.lua_getglobal, tbl.lua_setglobal, tbl.lua_settop,
@@ -933,115 +931,190 @@ uintptr_t World::discover_dm_by_lua_rip() {
         tbl.lua_pushthread, tbl.lua_xmove,
     };
 
-    // Collect unique resolved target addresses from RIP-relative instructions
-    std::vector<uintptr_t> targets;
-    targets.reserve(256);
-    int funcs_scanned = 0;
-
-    auto add_unique = [&](uintptr_t t) {
-        if (!mem_.looks(t)) return;
-        for (uintptr_t x : targets)
-            if (x == t) return;
-        targets.push_back(t);
+    auto heap = [](uintptr_t p) {
+        return p > 0x10000 && p < 0x00007F0000000000ULL && (p & 7) == 0;
     };
 
+    // lua_State validator: check for sensible stack base/top pointers
+    auto looks_lua_state = [&](uintptr_t L) -> bool {
+        if (!heap(L)) return false;
+        // Try common base/top offset pairs in lua_State
+        const int pairs[][2] = {
+            {0x10, 0x18}, {0x18, 0x20}, {0x20, 0x28}, {0x08, 0x10},
+            {0x28, 0x30}, {0x30, 0x38},
+        };
+        for (auto& pr : pairs) {
+            uintptr_t base_p = mem_.read_ptr(L + pr[0]);
+            uintptr_t top_p  = mem_.read_ptr(L + pr[1]);
+            if (!heap(base_p) || !heap(top_p)) continue;
+            if (top_p < base_p || (top_p - base_p) > 0x100000) continue;
+            size_t slots = (top_p - base_p) / 16;
+            if (slots >= 1 && slots < 8000) {
+                // Extra check: global_State pointer should be nearby
+                for (int go : {0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40}) {
+                    uintptr_t gs = mem_.read_ptr(L + go);
+                    if (heap(gs) && gs != L && gs != base_p && gs != top_p)
+                        return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    // From a lua_State or global_State, probe for DataModel
+    auto walk_to_dm = [&](uintptr_t state, const wchar_t* label) -> uintptr_t {
+        // Read a block of pointers from the state and check each as DM
+        for (int off = 0; off <= 0x300; off += 8) {
+            uintptr_t p1 = mem_.read_ptr(state + off);
+            if (!heap(p1)) continue;
+            int s1 = place_score(p1);
+            if (s1 >= 80) {
+                VT_LOG(std::wstring(label) + L" direct DM at +" + format_hex(off) +
+                       L"  dm=" + format_hex(p1) + L"  score=" + std::to_wstring(s1));
+                return p1;
+            }
+            // One more deref — ScriptContext→Parent→DataModel
+            for (int off2 : {0x40, 0x48, 0x50, 0x38, 0x58, 0x60, 0x68}) {
+                uintptr_t p2 = mem_.read_ptr(p1 + off2);
+                if (!heap(p2) || p2 == p1) continue;
+                int s2 = place_score(p2);
+                if (s2 >= 80) {
+                    VT_LOG(std::wstring(label) + L" DM via +" + format_hex(off) +
+                           L"→+" + format_hex(off2) +
+                           L"  dm=" + format_hex(p2) + L"  score=" + std::to_wstring(s2));
+                    return p2;
+                }
+            }
+        }
+        return 0;
+    };
+
+    // Collect unique resolved target addresses
+    struct Target { uintptr_t addr; bool in_module; };
+    std::vector<Target> targets;
+    targets.reserve(512);
+    int funcs_scanned = 0;
+    int callees_followed = 0;
+
+    auto add_unique = [&](uintptr_t t, bool in_mod) {
+        for (auto& x : targets)
+            if (x.addr == t) return;
+        targets.push_back({t, in_mod});
+    };
+
+    // Scan a code buffer for RIP-relative targets and E8 CALL targets
+    auto scan_code = [&](uintptr_t fn_addr, const uint8_t* code, int len, bool follow_calls) {
+        for (int i = 0; i + 7 <= len; ++i) {
+            const uint8_t b0 = code[i];
+
+            // E8 rel32 — near CALL (follow into callee)
+            if (b0 == 0xE8 && follow_calls && i + 5 <= len) {
+                int32_t rel = *(int32_t*)(code + i + 1);
+                uintptr_t callee = fn_addr + i + 5 + rel;
+                if (callee >= base_ && callee < base_ + size_ && callee != fn_addr) {
+                    uint8_t callee_code[256]{};
+                    if (mem_.read(callee, callee_code, sizeof(callee_code))) {
+                        ++callees_followed;
+                        scan_code(callee, callee_code, 256, false);
+                    }
+                }
+                continue;
+            }
+
+            // REX.W prefix: 48 or 4C
+            if (b0 != 0x48 && b0 != 0x4C) continue;
+            if (i + 7 > len) break;
+            const uint8_t op = code[i + 1];
+            if (op != 0x8B && op != 0x8D) continue;
+            const uint8_t modrm = code[i + 2];
+            if ((modrm & 0xC7) != 0x05) continue;
+
+            int32_t disp = *(int32_t*)(code + i + 3);
+            uintptr_t target = fn_addr + i + 7 + disp;
+
+            if (target >= base_ && target < base_ + size_) {
+                add_unique(target, true);
+                uintptr_t deref = mem_.read_ptr(target);
+                if (heap(deref))
+                    add_unique(deref, false);
+            }
+        }
+    };
+
+    // Scan each Lua function (512 bytes + follow E8 callees)
     for (uintptr_t rva : rvas) {
         if (!rva) continue;
         const uintptr_t fn_addr = base_ + rva;
-        uint8_t code[256]{};
+        uint8_t code[512]{};
         if (!mem_.read(fn_addr, code, sizeof(code)))
             continue;
         ++funcs_scanned;
-
-        for (int i = 0; i + 7 <= 256; ++i) {
-            // REX.W prefix: 48 or 4C
-            const uint8_t rex = code[i];
-            if (rex != 0x48 && rex != 0x4C)
-                continue;
-            const uint8_t op = code[i + 1];
-            // 8B = mov reg, [rip+disp32]    8D = lea reg, [rip+disp32]
-            if (op != 0x8B && op != 0x8D)
-                continue;
-            const uint8_t modrm = code[i + 2];
-            // ModRM: mod=00, r/m=101 (RIP-relative) → modrm & 0xC7 == 0x05
-            if ((modrm & 0xC7) != 0x05)
-                continue;
-
-            // disp32 at code[i+3..i+6]
-            int32_t disp = *(int32_t*)(code + i + 3);
-            uintptr_t target = fn_addr + i + 7 + disp;  // RIP = fn_addr + i + 7
-
-            // Target should be in the module's address range (data section)
-            if (target >= base_ && target < base_ + size_) {
-                add_unique(target);
-                // Also dereference once — the .data slot might hold a pointer
-                uintptr_t deref = mem_.read_ptr(target);
-                add_unique(deref);
-            }
-        }
+        scan_code(fn_addr, code, 512, true);
     }
+
     VT_LOG(L"Lua RIP scan: " + std::to_wstring(funcs_scanned) + L" functions, " +
+           std::to_wstring(callees_followed) + L" callees, " +
            std::to_wstring(targets.size()) + L" unique targets");
 
     if (targets.empty()) return 0;
 
-    // For each target, try to interpret it as:
-    // a) Direct DataModel pointer
-    // b) A structure containing a pointer to DataModel at various offsets
-    // c) A ScriptContext or similar that has a Parent chain leading to DataModel
+    // Phase A: test each target as a plausible lua_State
+    int lua_states_found = 0;
+    for (auto& tgt : targets) {
+        if (GetTickCount() - t0 > 8000) break;
+        if (tgt.in_module) continue;  // lua_State is on heap, not in module
+
+        if (looks_lua_state(tgt.addr)) {
+            ++lua_states_found;
+            VT_LOG(L"Lua RIP: plausible lua_State at " + format_hex(tgt.addr));
+
+            // Walk lua_State → global_State candidates → DM
+            if (auto dm = walk_to_dm(tgt.addr, L"lua_State"))
+                return dm;
+
+            // Try global_State pointers from lua_State
+            for (int go : {0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40}) {
+                uintptr_t gs = mem_.read_ptr(tgt.addr + go);
+                if (!heap(gs) || gs == tgt.addr) continue;
+                if (auto dm = walk_to_dm(gs, L"global_State"))
+                    return dm;
+            }
+        }
+    }
+    VT_LOG(L"Lua RIP: " + std::to_wstring(lua_states_found) + L" lua_State candidates checked");
+
+    // Phase B: probe all targets as structures containing DM pointer
     uintptr_t best_dm = 0;
     int best_score = 0;
+    for (auto& tgt : targets) {
+        if (GetTickCount() - t0 > 10000) break;
+        uintptr_t t = tgt.addr;
+        if (!heap(t) && !(t >= base_ && t < base_ + size_)) continue;
 
-    auto try_dm = [&](uintptr_t cand) {
-        if (!mem_.looks(cand) || (cand & 7)) return;
-        int s = place_score(cand);
-        if (s > best_score) {
-            best_score = s;
-            best_dm = cand;
-        }
-    };
+        // Direct place_score check
+        int s = place_score(t);
+        if (s >= 80) { best_dm = t; best_score = s; break; }
+        if (s > best_score) { best_score = s; best_dm = t; }
 
-    // Structure offsets to try for DataModel pointer
-    const uintptr_t dm_off[] = {
-        0, 8, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48,
-        0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90, 0x98,
-        0xA0, 0xA8, 0xB0, 0xB8, 0xC0, 0xC8, 0xD0, 0xD8, 0xE0, 0xE8,
-        0xF0, 0xF8, 0x100, 0x108, 0x110, 0x118, 0x120, 0x128, 0x130,
-        0x138, 0x140, 0x148, 0x150, 0x158, 0x160, 0x168, 0x170, 0x178,
-        0x180, 0x188, 0x190, 0x198, 0x1A0, 0x1A8, 0x1B0, 0x1B8,
-        0x1C0, 0x1C8, 0x1D0, 0x1D8, 0x1E0, 0x1E8, 0x1F0, 0x1F8,
-        0x200, 0x208, 0x210, 0x218, 0x220, 0x228, 0x230, 0x238,
-    };
-
-    for (uintptr_t t : targets) {
-        if (GetTickCount() - t0 > 6000) break;
-        // Direct check
-        try_dm(t);
-        if (best_score >= 80) goto found;
-
-        // t might be a pointer to a structure; dereference and probe
-        if (mem_.looks(t)) {
-            for (uintptr_t doff : dm_off) {
+        // Probe offsets 0..0x238 for a DM pointer
+        if (heap(t)) {
+            for (uintptr_t doff = 0; doff <= 0x238; doff += 8) {
                 uintptr_t p = mem_.read_ptr(t + doff);
-                try_dm(p);
-                if (best_score >= 80) goto found;
+                if (!heap(p)) continue;
+                s = place_score(p);
+                if (s >= 80) { best_dm = p; best_score = s; goto found; }
+                if (s > best_score) { best_score = s; best_dm = p; }
             }
+        }
 
-            // Walk Parent chain: if t is an Instance, walk Parent until
-            // we hit something that looks like DataModel
-            for (int depth = 0; depth < 10; ++depth) {
-                uintptr_t parent = 0;
-                for (uintptr_t po : { 0x40ull, 0x48ull, 0x50ull, 0x38ull }) {
-                    uintptr_t pp = mem_.read_ptr(t + po);
-                    if (mem_.looks(pp) && pp != t) {
-                        parent = pp;
-                        break;
-                    }
-                }
-                if (!parent || parent == t) break;
-                try_dm(parent);
-                if (best_score >= 80) goto found;
-                t = parent;
+        // ±0x200 scan around module targets for adjacent Instance/DM
+        if (tgt.in_module) {
+            for (int delta = -0x200; delta <= 0x200; delta += 8) {
+                uintptr_t p = mem_.read_ptr(t + delta);
+                if (!heap(p)) continue;
+                s = place_score(p);
+                if (s >= 80) { best_dm = p; best_score = s; goto found; }
+                if (s > best_score) { best_score = s; best_dm = p; }
             }
         }
     }
@@ -1057,8 +1130,9 @@ found:
         VT_WARN(L"Lua RIP scan: best candidate dm=" + format_hex(best_dm) +
                 L" score=" + std::to_wstring(best_score) + L" (too low)");
     }
-    VT_WARN(L"Lua RIP scan: no DataModel found (" +
-            std::to_wstring(targets.size()) + L" targets probed in " +
+    VT_WARN(L"Lua RIP scan: no DataModel (" +
+            std::to_wstring(targets.size()) + L" targets, " +
+            std::to_wstring(lua_states_found) + L" lua_States in " +
             std::to_wstring(GetTickCount() - t0) + L"ms)");
     return 0;
 }
@@ -1264,9 +1338,11 @@ uintptr_t World::discover_dm_by_string() {
         const uintptr_t r2 = (uintptr_t)mbi2.RegionSize;
         const uintptr_t n2 = (uintptr_t)mbi2.BaseAddress + r2;
         if (n2 <= a2) break;
-        if (mbi2.State == MEM_COMMIT && r2 >= 0x1000 &&
-            (mbi2.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READ |
-                             PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY)) &&
+        // Restricted scan: skip MEM_IMAGE (mapped DLLs), prefer large
+        // private RW heaps where Instance allocations live
+        if (mbi2.State == MEM_COMMIT && r2 >= 0x10000 &&
+            mbi2.Type != MEM_IMAGE &&
+            (mbi2.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) &&
             !((uintptr_t)mbi2.BaseAddress >= base_ &&
               (uintptr_t)mbi2.BaseAddress < base_ + size_))
         {
