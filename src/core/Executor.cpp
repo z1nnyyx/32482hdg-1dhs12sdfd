@@ -374,6 +374,23 @@ Executor& Executor::instance() {
 bool Executor::attach(std::uint32_t pid, std::uintptr_t data_model) {
     std::lock_guard<std::mutex> lock(mtx_);
 
+    // Ensure ntdll function pointers are resolved (Xeno's Initialize() is
+    // not called in the external-executor path, so the globals start null).
+    {
+        static bool ntdll_ready = false;
+        if (!ntdll_ready) {
+            HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+            if (!ntdll) ntdll = LoadLibraryW(L"ntdll.dll");
+            if (ntdll) {
+                NTDLL_INIT_FCNS(ntdll);
+                ntdll_ready = true;
+            } else {
+                VT_WARN(L"voidtrace: ntdll.dll not found — attach impossible");
+                return false;
+            }
+        }
+    }
+
     if (hproc_ && pid_ == pid && data_model_ == data_model && bootstrapped_) {
         VT_LOG(L"voidtrace: already attached to pid=" + std::to_wstring(pid));
         return true;

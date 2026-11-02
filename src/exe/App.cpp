@@ -1751,7 +1751,22 @@ void attach_after_sync() {
         VT_LOG(L"place DataModel live — F5 starts overlay ESP");
     else
         VT_WARN(L"place DataModel not found yet — join a match, then F5");
-    start_ext_esp();
+    // Start overlay for the status chip + DataModel discovery, but keep
+    // ESP off until a script that uses it is executed (user request).
+    if (g_rbx) {
+        auto& ov = ext::Overlay::instance();
+        ov.set_host(g_wnd);
+        ov.set_esp(false);
+        if (ov.start(g_rbx->pid, g_rbx->base, g_rbx->size, g_rbx->hwnd)) {
+            // Seed the native executor with the discovered DataModel.
+            auto dm = ov.data_model();
+            if (dm != 0) {
+                vt::Executor::instance().attach(
+                    static_cast<std::uint32_t>(g_rbx->pid),
+                    static_cast<std::uintptr_t>(dm));
+            }
+        }
+    }
     if (!g_autoexec_done) {
         g_autoexec_done = true;
         run_autoexec();
