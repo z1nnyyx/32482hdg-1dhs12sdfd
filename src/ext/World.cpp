@@ -12,6 +12,7 @@
 #include <cstring>
 #include <iterator>
 #include <initializer_list>
+#include <unordered_set>
 #include <vector>
 
 using NtCreateSection_t = LONG(NTAPI*)(
@@ -935,23 +936,20 @@ uintptr_t World::discover_dm_by_lua_rip() {
         return p > 0x10000 && p < 0x00007F0000000000ULL && (p & 7) == 0;
     };
 
-    // lua_State validator: check for sensible stack base/top pointers
+    // lua_State validator: probe every 8-byte aligned pair in 0x00..0x60
+    // for stack base/top pattern (two heap pointers, top >= base, sane slot count)
     auto looks_lua_state = [&](uintptr_t L) -> bool {
         if (!heap(L)) return false;
-        // Try common base/top offset pairs in lua_State
-        const int pairs[][2] = {
-            {0x10, 0x18}, {0x18, 0x20}, {0x20, 0x28}, {0x08, 0x10},
-            {0x28, 0x30}, {0x30, 0x38},
-        };
-        for (auto& pr : pairs) {
-            uintptr_t base_p = mem_.read_ptr(L + pr[0]);
-            uintptr_t top_p  = mem_.read_ptr(L + pr[1]);
+        for (int a = 0x00; a <= 0x58; a += 8) {
+            uintptr_t base_p = mem_.read_ptr(L + a);
+            uintptr_t top_p  = mem_.read_ptr(L + a + 8);
             if (!heap(base_p) || !heap(top_p)) continue;
             if (top_p < base_p || (top_p - base_p) > 0x100000) continue;
             size_t slots = (top_p - base_p) / 16;
             if (slots >= 1 && slots < 8000) {
-                // Extra check: global_State pointer should be nearby
-                for (int go : {0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40}) {
+                // global_State pointer should be somewhere in the struct
+                for (int go = 0x00; go <= 0x48; go += 8) {
+                    if (go == a || go == a + 8) continue;
                     uintptr_t gs = mem_.read_ptr(L + go);
                     if (heap(gs) && gs != L && gs != base_p && gs != top_p)
                         return true;
@@ -961,9 +959,10 @@ uintptr_t World::discover_dm_by_lua_rip() {
         return false;
     };
 
-    // From a lua_State or global_State, probe for DataModel
+    // Walk: state → probe every pointer as DM, or as ScriptContext→Parent→DM
+    // Also: explicit lua_State → global_State → ScriptContext → DataModel chain
     auto walk_to_dm = [&](uintptr_t state, const wchar_t* label) -> uintptr_t {
-        // Read a block of pointers from the state and check each as DM
+        // Step 1: direct DM pointer in the struct
         for (int off = 0; off <= 0x300; off += 8) {
             uintptr_t p1 = mem_.read_ptr(state + off);
             if (!heap(p1)) continue;
@@ -973,16 +972,43 @@ uintptr_t World::discover_dm_by_lua_rip() {
                        L"  dm=" + format_hex(p1) + L"  score=" + std::to_wstring(s1));
                 return p1;
             }
-            // One more deref — ScriptContext→Parent→DataModel
-            for (int off2 : {0x40, 0x48, 0x50, 0x38, 0x58, 0x60, 0x68}) {
+        }
+        // Step 2: one level of indirection — p1 could be ScriptContext or
+        // any container that holds a DM pointer or a Parent pointer to DM
+        for (int off = 0; off <= 0x300; off += 8) {
+            uintptr_t p1 = mem_.read_ptr(state + off);
+            if (!heap(p1) || p1 == state) continue;
+            // Check Parent-like offsets (ScriptContext→Parent→DataModel)
+            for (int off2 = 0x28; off2 <= 0x90; off2 += 8) {
                 uintptr_t p2 = mem_.read_ptr(p1 + off2);
-                if (!heap(p2) || p2 == p1) continue;
+                if (!heap(p2) || p2 == p1 || p2 == state) continue;
                 int s2 = place_score(p2);
                 if (s2 >= 80) {
                     VT_LOG(std::wstring(label) + L" DM via +" + format_hex(off) +
                            L"→+" + format_hex(off2) +
                            L"  dm=" + format_hex(p2) + L"  score=" + std::to_wstring(s2));
                     return p2;
+                }
+            }
+        }
+        // Step 3: two levels — L→global→ScriptContext→Parent→DM
+        for (int off = 0; off <= 0x60; off += 8) {
+            uintptr_t gs = mem_.read_ptr(state + off);
+            if (!heap(gs) || gs == state) continue;
+            for (int g2 = 0; g2 <= 0x200; g2 += 8) {
+                uintptr_t sc = mem_.read_ptr(gs + g2);
+                if (!heap(sc) || sc == gs || sc == state) continue;
+                // ScriptContext→Parent at typical offsets
+                for (int po = 0x28; po <= 0x60; po += 8) {
+                    uintptr_t dm = mem_.read_ptr(sc + po);
+                    if (!heap(dm) || dm == sc) continue;
+                    int sd = place_score(dm);
+                    if (sd >= 80) {
+                        VT_LOG(std::wstring(label) + L" DM via L+" + format_hex(off) +
+                               L"→G+" + format_hex(g2) + L"→SC+" + format_hex(po) +
+                               L"  dm=" + format_hex(dm) + L"  score=" + std::to_wstring(sd));
+                        return dm;
+                    }
                 }
             }
         }
@@ -1017,6 +1043,20 @@ uintptr_t World::discover_dm_by_lua_rip() {
                         ++callees_followed;
                         scan_code(callee, callee_code, 256, false);
                     }
+                }
+                continue;
+            }
+
+            // FF 15 xx xx xx xx — indirect CALL [rip+disp32]
+            // The target at [rip+disp] is a function pointer in .rdata/.data
+            if (b0 == 0xFF && i + 6 <= len && code[i + 1] == 0x15) {
+                int32_t disp = *(int32_t*)(code + i + 2);
+                uintptr_t slot = fn_addr + i + 6 + disp;
+                if (slot >= base_ && slot < base_ + size_) {
+                    add_unique(slot, true);
+                    uintptr_t deref = mem_.read_ptr(slot);
+                    if (heap(deref))
+                        add_unique(deref, false);
                 }
                 continue;
             }
@@ -1215,11 +1255,33 @@ uintptr_t World::discover_dm_by_string() {
            L" StarterGui=" + std::to_wstring(counts[5]) +
            L") in " + std::to_wstring(GetTickCount() - t0) + L"ms");
 
-    // Build flat list for Phase 2 pointer scanning (backwards compat)
+    // Build target address list for Phase 2 pointer scanning.
+    // KEY INSIGHT (Grok round 3): The Instance's Name field does NOT point
+    // at the raw character data — it points at a string OBJECT HEADER that
+    // precedes the characters. So when we find "Players" at address X, the
+    // Name field actually points to X-8, X-16, X-24, or X-32. We must scan
+    // for pointers to ALL of these, not just X.
+    struct PtrTarget { uintptr_t addr; int needle_idx; };
+    std::vector<PtrTarget> ptr_targets;
+    ptr_targets.reserve(string_hits.size() * 5);
+    for (auto& h : string_hits) {
+        // Direct pointer to char data (maybe SSO inline = object base)
+        ptr_targets.push_back({h.addr, h.needle_idx});
+        // String object header variants (header before char data)
+        for (int hdr_off = 8; hdr_off <= 32; hdr_off += 8) {
+            if (h.addr >= (uintptr_t)hdr_off)
+                ptr_targets.push_back({h.addr - hdr_off, h.needle_idx});
+        }
+    }
+    // Also keep flat list for backwards compat
     std::vector<uintptr_t> players_strings;
     for (auto& h : string_hits)
         players_strings.push_back(h.addr);
-    if (players_strings.empty()) return 0;
+    if (ptr_targets.empty()) return 0;
+
+    VT_LOG(L"String scan: " + std::to_wstring(ptr_targets.size()) +
+           L" pointer targets (with header offsets) from " +
+           std::to_wstring(string_hits.size()) + L" char hits");
 
     // Phase 2: for each "Players" string, search heap for Instance objects
     // that point to it. The Instance has a Name field at some offset that
@@ -1293,13 +1355,17 @@ uintptr_t World::discover_dm_by_string() {
         return 0;
     };
 
-    // Phase 2a (fast): for each string hit, scan a ±64KB region around it
-    // for heap pointers TO the string. If we find inst+name_off == string_addr,
-    // walk Parent up to DataModel. Faster than full-process pointer scan.
-    VT_LOG(L"String scan phase 2a: local pointer scan + Parent walk");
+    // Phase 2a (fast): for each string hit + header variants, scan ±64KB
+    // for heap pointers TO the string object. The Instance Name field
+    // points to the string header (not char data), so we try all header offsets.
+    VT_LOG(L"String scan phase 2a: local pointer scan + header indirection + Parent walk");
+
+    // Build a set of all target addrs for fast lookup in the local buffer
+    std::unordered_set<uintptr_t> target_set;
+    for (auto& pt : ptr_targets) target_set.insert(pt.addr);
+
     for (auto& hit : string_hits) {
         if (GetTickCount() - t0 > 12000) break;
-        // Read 64KB region centered on the string address
         const uintptr_t scan_start = (hit.addr > 0x10000) ? (hit.addr - 0x10000) : 0x10000;
         const size_t scan_size = 0x20000; // 128KB
         std::vector<uint8_t> local_buf(scan_size);
@@ -1307,8 +1373,8 @@ uintptr_t World::discover_dm_by_string() {
             continue;
         for (size_t j = 0; j + 8 <= scan_size; j += 8) {
             const uintptr_t val = *(uintptr_t*)(local_buf.data() + j);
-            if (val != hit.addr) continue;
-            // Found a pointer to our string. Try each name offset.
+            // Check if val points to any of our targets (char data or headers)
+            if (target_set.find(val) == target_set.end()) continue;
             const uintptr_t ptr_addr = scan_start + j;
             for (uintptr_t no : name_try) {
                 if (ptr_addr < no) continue;
@@ -1316,7 +1382,8 @@ uintptr_t World::discover_dm_by_string() {
                 if (!looks_instance(inst)) continue;
                 uintptr_t dm = check_dm_candidate(inst, no);
                 if (dm) {
-                    VT_LOG(L"Phase 2a hit via " + utf8_to_wide(needles[hit.needle_idx].text));
+                    VT_LOG(L"Phase 2a hit via " + utf8_to_wide(needles[hit.needle_idx].text) +
+                           L" (ptr_val=" + format_hex(val) + L" char_addr=" + format_hex(hit.addr) + L")");
                     return dm;
                 }
             }
@@ -1355,11 +1422,8 @@ uintptr_t World::discover_dm_by_string() {
                     continue;
                 for (size_t j = 0; j + 8 <= toread; j += 8) {
                     const uintptr_t val = *(uintptr_t*)(buf2.data() + j);
-                    bool match = false;
-                    for (uintptr_t ps : players_strings) {
-                        if (val == ps) { match = true; break; }
-                    }
-                    if (!match) continue;
+                    // Check against all targets (char data + header offsets)
+                    if (target_set.find(val) == target_set.end()) continue;
                     const uintptr_t ptr_addr = (uintptr_t)mbi2.BaseAddress + off + j;
                     for (uintptr_t no : name_try) {
                         if (ptr_addr < no) continue;
